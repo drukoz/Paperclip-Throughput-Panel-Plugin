@@ -17,3 +17,13 @@ test("manifest entrypoints match the build output paths", () => {
   assert.equal(manifest.entrypoints.worker, "dist/worker.js");
   assert.equal(manifest.entrypoints.ui, "dist/ui");
 });
+
+test("manifest declares the poll interval bounds the worker enforces", () => {
+  const properties = manifest.instanceConfigSchema?.properties as
+    | Record<string, { default?: number; minimum?: number; maximum?: number }>
+    | undefined;
+  const pollIntervalMs = properties?.pollIntervalMs;
+  assert.equal(pollIntervalMs?.default, 5000);
+  assert.equal(pollIntervalMs?.minimum, 1000);
+  assert.equal(pollIntervalMs?.maximum, 60000);
+});

@@ -42,6 +42,7 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Poll interval (ms)",
         default: 5000,
         minimum: 1000,
+        maximum: 60000,
       },
     },
   },
