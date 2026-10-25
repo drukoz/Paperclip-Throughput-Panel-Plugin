@@ -122,7 +122,8 @@ test("a secret_ref authToken is resolved and sent as a Bearer header", async () 
     config: {
       metricsUrl: "http://secretref.local/metrics",
       modelName: "test-model",
-      authToken: { type: "secret_ref", ref: "throughput-metrics-token" },
+      // The real shape of EnvSecretRefBinding: `secretId`, not `ref`.
+      authToken: { type: "secret_ref", secretId: "11111111-2222-3333-4444-555555555555" },
     },
   });
   await plugin.definition.setup(ctx);
