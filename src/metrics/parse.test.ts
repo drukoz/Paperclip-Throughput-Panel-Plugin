@@ -67,6 +67,19 @@ test("skips malformed lines but returns good series", () => {
   assert.equal(result[1]?.name, "good_metric2");
 });
 
+test("skips lines with a non-numeric value", () => {
+  const input = [
+    "good_metric 1",
+    "bad_metric abc",
+    'labeled{a="1"} not-a-number',
+    "good_metric2 2",
+  ].join("\n");
+  const result = parsePrometheusText(input);
+  assert.equal(result.length, 2);
+  assert.equal(result[0]?.name, "good_metric");
+  assert.equal(result[1]?.name, "good_metric2");
+});
+
 test("parses +Inf and NaN", () => {
   const result = parsePrometheusText("a +Inf\nb NaN\nc -Inf");
   assert.equal(result.length, 3);
