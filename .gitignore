@@ -1,3 +1,5 @@
 node_modules/
 dist/
 *.log
+# Paperclip run data (agent home, OpenCode snapshots); never commit it
+.paperclip-runtime/
