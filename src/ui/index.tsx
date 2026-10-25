@@ -37,6 +37,17 @@ const baseCard: CSSProperties = {
   pointerEvents: "auto",
 };
 
+const pillCard: CSSProperties = {
+  ...baseCard,
+  minWidth: 92,
+  maxWidth: 220,
+  padding: "6px 10px",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 2,
+};
+
 const collapseBtn: CSSProperties = {
   background: "transparent",
   border: "none",
@@ -189,6 +200,18 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
     };
   }
 
+  const pillBody = (
+    <>
+      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span title={compact.title} style={dotStyle(compact.color)} />
+        <span>{compact.text}</span>
+      </span>
+      {compact.message ? (
+        <span style={{ ...errMsg, marginTop: 0 }}>{compact.message}</span>
+      ) : null}
+    </>
+  );
+
   return (
     <div
       style={{
@@ -200,31 +223,25 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
       }}
     >
       {showCompact ? (
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-expanded={false}
-          aria-label="Expand throughput panel"
-          style={{
-            ...baseCard,
-            minWidth: 92,
-            maxWidth: 220,
-            padding: "6px 10px",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-start",
-            gap: 2,
-            cursor: "pointer",
-          }}
-        >
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span title={compact.title} style={dotStyle(compact.color)} />
-            <span>{compact.text}</span>
-          </span>
-          {compact.message ? (
-            <span style={{ ...errMsg, marginTop: 0 }}>{compact.message}</span>
-          ) : null}
-        </button>
+        hasRichData ? (
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-expanded={false}
+            aria-label="Expand throughput panel"
+            style={{ ...pillCard, cursor: "pointer" }}
+          >
+            {pillBody}
+          </button>
+        ) : (
+          // Starting / loading / bridge error: the pill is the whole readout,
+          // there is nothing to expand into. A button here would claim to
+          // expand, do nothing visible, and silently persist `collapsed` —
+          // so the panel would come back collapsed once data arrived.
+          <div role="status" aria-live="polite" style={pillCard}>
+            {pillBody}
+          </div>
+        )
       ) : (
         data && (
           <div
