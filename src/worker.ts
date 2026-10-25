@@ -1,8 +1,226 @@
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+import type { PluginContext } from "@paperclipai/plugin-sdk";
+import { parsePrometheusText, selectSample } from "./metrics/parse.ts";
+import { ThroughputWindow } from "./metrics/rates.ts";
+import { buildSnapshot } from "./snapshot.ts";
+import type { ThroughputSnapshot } from "./types.ts";
+
+const DEFAULT_METRICS_URL = "http://127.0.0.1:18081/metrics";
+const DEFAULT_MODEL_NAME = "swift-1.5";
+const DEFAULT_POLL_INTERVAL_MS = 5000;
+const MIN_POLL_INTERVAL_MS = 1000;
+const MAX_POLL_INTERVAL_MS = 60_000;
+
+interface Settings {
+  metricsUrl: string;
+  /** Raw config value: a literal string, a `{ type: "secret_ref", ... }` object, or null. Never the resolved value. */
+  authToken: unknown;
+  modelName: string;
+  pollIntervalMs: number;
+}
+
+let ctxRef: PluginContext | null = null;
+let settings: Settings | null = null;
+let window = new ThroughputWindow();
+let lastError: string | null = null;
+let started = false;
+let modelName: string | null = null;
+let timer: ReturnType<typeof setInterval> | null = null;
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function clampPollInterval(ms: number): number {
+  return Math.min(MAX_POLL_INTERVAL_MS, Math.max(MIN_POLL_INTERVAL_MS, ms));
+}
+
+function resolveSettings(config: Record<string, unknown> | null): Settings {
+  const rawInterval = config?.pollIntervalMs;
+  return {
+    metricsUrl:
+      firstString(config?.metricsUrl, process.env.THROUGHPUT_METRICS_URL) ??
+      DEFAULT_METRICS_URL,
+    authToken:
+      config?.authToken !== undefined && config.authToken !== null
+        ? config.authToken
+        : (firstString(process.env.THROUGHPUT_METRICS_TOKEN) ?? null),
+    modelName:
+      firstString(config?.modelName, process.env.THROUGHPUT_MODEL_NAME) ??
+      DEFAULT_MODEL_NAME,
+    pollIntervalMs: clampPollInterval(
+      typeof rawInterval === "number" && Number.isFinite(rawInterval)
+        ? rawInterval
+        : DEFAULT_POLL_INTERVAL_MS,
+    ),
+  };
+}
+
+/** Resolve the auth token for one poll. The resolved value is used in memory only and never stored. */
+async function resolveToken(ctx: PluginContext, raw: unknown): Promise<string | null> {
+  if (raw !== null && typeof raw === "object") {
+    if ((raw as { type?: unknown }).type === "secret_ref") {
+      try {
+        const token = await ctx.secrets.resolve(raw as never);
+        return token.length > 0 ? token : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+  if (typeof raw === "string") return raw.length > 0 ? raw : null;
+  return null;
+}
+
+async function poll(ctx: PluginContext): Promise<void> {
+  const active = settings;
+  if (active === null) return;
+  try {
+    const token = await resolveToken(ctx, active.authToken);
+    const res = await ctx.http.fetch(active.metricsUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(Math.min(4000, active.pollIntervalMs - 500)),
+    });
+    if (!res.ok) {
+      lastError = `HTTP ${res.status} ${res.statusText}`;
+      return;
+    }
+    const series = parsePrometheusText(await res.text());
+    const picked = selectSample(series, {
+      at: Date.now(),
+      modelName: active.modelName,
+    });
+    if (picked === null) {
+      lastError = `no vllm metrics for model "${active.modelName}" at ${active.metricsUrl}`;
+      return;
+    }
+    window.push(picked.sample);
+    modelName = picked.modelName;
+    lastError = null;
+  } catch (err) {
+    lastError = err instanceof Error ? err.message : String(err);
+    ctx.logger.warn(`throughput poll failed: ${lastError}`);
+  } finally {
+    started = true;
+  }
+}
+
+function startPolling(ctx: PluginContext): void {
+  if (timer !== null) clearInterval(timer);
+  void poll(ctx);
+  timer = setInterval(() => {
+    void poll(ctx);
+  }, settings?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+}
 
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.logger.info("throughput panel worker starting");
+    ctxRef = ctx;
+
+    let config: Record<string, unknown> | null = null;
+    try {
+      config = await ctx.config.get();
+    } catch (err) {
+      ctx.logger.warn(
+        `throughput panel config read failed, falling back to env/defaults: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    settings = resolveSettings(config);
+
+    ctx.logger.info("throughput panel worker starting", {
+      metricsUrl: settings.metricsUrl,
+      modelName: settings.modelName,
+      pollIntervalMs: settings.pollIntervalMs,
+    });
+
+    ctx.data.register("throughput", async (): Promise<ThroughputSnapshot> =>
+      buildSnapshot({ window, lastError, started, modelName }),
+    );
+
+    startPolling(ctx);
+  },
+
+  async onConfigChanged(newConfig) {
+    if (ctxRef === null) return;
+    try {
+      const previous = settings;
+      settings = resolveSettings(newConfig);
+      if (
+        previous === null ||
+        settings.metricsUrl !== previous.metricsUrl ||
+        settings.modelName !== previous.modelName
+      ) {
+        window = new ThroughputWindow();
+        modelName = null;
+      }
+      startPolling(ctxRef);
+      ctxRef.logger.info("throughput panel config reloaded", {
+        metricsUrl: settings.metricsUrl,
+        modelName: settings.modelName,
+        pollIntervalMs: settings.pollIntervalMs,
+      });
+    } catch (err) {
+      ctxRef.logger.warn(
+        `throughput panel config reload failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  },
+
+  async onShutdown() {
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+  },
+
+  async onHealth() {
+    const details: Record<string, unknown> = {
+      metricsUrl: settings?.metricsUrl ?? null,
+      modelName,
+      sampleCount: window.size(),
+    };
+    if (!started) {
+      return { status: "ok", message: "starting", details };
+    }
+    if (lastError !== null) {
+      return { status: "degraded", message: lastError, details };
+    }
+    return { status: "ok", message: "metrics streaming", details };
+  },
+
+  async onValidateConfig(config) {
+    const errors: string[] = [];
+
+    const url = config.metricsUrl;
+    if (typeof url === "string") {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          errors.push(`metricsUrl must be an http: or https: URL, got "${url}"`);
+        }
+      } catch {
+        errors.push(`metricsUrl is not a valid URL: "${url}"`);
+      }
+    }
+
+    const interval = config.pollIntervalMs;
+    if (
+      interval !== undefined &&
+      (typeof interval !== "number" ||
+        !Number.isFinite(interval) ||
+        interval < MIN_POLL_INTERVAL_MS ||
+        interval > MAX_POLL_INTERVAL_MS)
+    ) {
+      errors.push(`pollIntervalMs must be a number between ${MIN_POLL_INTERVAL_MS} and ${MAX_POLL_INTERVAL_MS}`);
+    }
+
+    return errors.length > 0 ? { ok: false, errors } : { ok: true };
   },
 });
 
