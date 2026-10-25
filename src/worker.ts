@@ -26,6 +26,8 @@ let lastError: string | null = null;
 let started = false;
 let modelName: string | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
+/** Bumped whenever `window` is replaced, so a poll in flight cannot write into the new window. */
+let windowGeneration = 0;
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -79,12 +81,14 @@ async function resolveToken(ctx: PluginContext, raw: unknown): Promise<string | 
 async function poll(ctx: PluginContext): Promise<void> {
   const active = settings;
   if (active === null) return;
+  const generation = windowGeneration;
   try {
     const token = await resolveToken(ctx, active.authToken);
     const res = await ctx.http.fetch(active.metricsUrl, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(Math.min(4000, active.pollIntervalMs - 500)),
     });
+    if (generation !== windowGeneration) return;
     if (!res.ok) {
       lastError = `HTTP ${res.status} ${res.statusText}`;
       return;
@@ -94,6 +98,7 @@ async function poll(ctx: PluginContext): Promise<void> {
       at: Date.now(),
       modelName: active.modelName,
     });
+    if (generation !== windowGeneration) return;
     if (picked === null) {
       lastError = `no vllm metrics for model "${active.modelName}" at ${active.metricsUrl}`;
       return;
@@ -102,10 +107,11 @@ async function poll(ctx: PluginContext): Promise<void> {
     modelName = picked.modelName;
     lastError = null;
   } catch (err) {
+    if (generation !== windowGeneration) return;
     lastError = err instanceof Error ? err.message : String(err);
     ctx.logger.warn(`throughput poll failed: ${lastError}`);
   } finally {
-    started = true;
+    if (generation === windowGeneration) started = true;
   }
 }
 
@@ -157,7 +163,10 @@ const plugin = definePlugin({
         settings.modelName !== previous.modelName
       ) {
         window = new ThroughputWindow();
+        windowGeneration += 1;
         modelName = null;
+        lastError = null;
+        started = false;
       }
       startPolling(ctxRef);
       ctxRef.logger.info("throughput panel config reloaded", {
