@@ -98,6 +98,8 @@ async function poll(ctx: PluginContext): Promise<void> {
       at: Date.now(),
       modelName: active.modelName,
     });
+    // The config changed while this scrape was in flight: it describes the old
+    // server, so discard it rather than seeding the new window with stale data.
     if (generation !== windowGeneration) return;
     if (picked === null) {
       lastError = `no vllm metrics for model "${active.modelName}" at ${active.metricsUrl}`;
