@@ -54,10 +54,11 @@ npm run build
      -d '{"packageName":"<absolute path to this repo>","isLocalPath":true}'
    ```
 
-3. Confirm it is installed and enabled:
+3. Confirm it is installed and enabled (this route also needs the board credential, same as the install call):
 
    ```bash
-   curl -s http://127.0.0.1:3100/api/plugins
+   curl -s http://127.0.0.1:3100/api/plugins \
+     -H "Authorization: Bearer <BOARD_API_KEY>"
    ```
 
    The list should include `rukoz.throughput-panel` as enabled.
@@ -115,18 +116,20 @@ For an installed plugin, **operator config is the only supported way** to set `m
 
 ## Verify
 
-Run these on the Paperclip host:
+Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics` check in step 4 does not.
 
 1. The plugin is installed and enabled:
 
    ```bash
-   curl -s http://127.0.0.1:3100/api/plugins
+   curl -s http://127.0.0.1:3100/api/plugins \
+     -H "Authorization: Bearer <BOARD_API_KEY>"
    ```
 
 2. The worker is healthy:
 
    ```bash
-   curl -s http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/health
+   curl -s http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/health \
+     -H "Authorization: Bearer <BOARD_API_KEY>"
    ```
 
    A healthy worker reports `ok` (with a `metrics streaming` message once it is receiving samples).
@@ -143,19 +146,27 @@ Run these on the Paperclip host:
 
 ## Troubleshooting
 
-Useful routes (run on the Paperclip host):
+The `/api/plugins` HTTP routes require a **board instance-admin credential**; a bare `curl` does not carry one and is answered with `403 {"error":"Board access required"}`. The supported way to reach them is the `paperclipai plugin` CLI, which carries the operator's own credential. Do not retry these routes with bare `curl`. Run these on the Paperclip host (the plugin key for this plugin is `rukoz.throughput-panel`):
 
 ```bash
-curl -s http://127.0.0.1:3100/api/plugins
-curl -s http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/health
-curl -s http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/logs
-curl -s -X POST http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/enable
-curl -s -X POST http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/disable
+paperclipai plugin list                          # list installed plugins
+paperclipai plugin inspect rukoz.throughput-panel   # full details for this plugin
+paperclipai plugin health rukoz.throughput-panel    # get plugin health
+paperclipai plugin logs rukoz.throughput-panel      # get plugin logs
+paperclipai plugin enable rukoz.throughput-panel    # enable a disabled/errored plugin
+paperclipai plugin disable rukoz.throughput-panel   # disable a running plugin without uninstalling
+paperclipai plugin target                         # show which instance plugin commands talk to
 ```
 
 - **Panel shows "Model server unreachable".** The worker cannot reach the endpoint. Check the endpoint directly (`curl -s http://127.0.0.1:18081/metrics`), check the configured `metricsUrl`, and check the token (a 401/403 from the endpoint means the token is missing or wrong).
 - **Panel shows "Model server unreachable" with an error mentioning "private/reserved ranges".** The worker is routing through the host's guarded HTTP client instead of scraping directly; that is the bug fixed in RUK-52, so make sure the installed build includes it.
-- **Panel shows "Panel unavailable".** The worker itself is not responding. Check `GET /api/plugins/rukoz.throughput-panel/logs` for worker errors, and consider a disable/enable cycle to restart it.
+- **Panel shows "Panel unavailable".** The worker itself is not responding. Check the logs for worker errors with `paperclipai plugin logs rukoz.throughput-panel`, then restart it with a disable/enable cycle:
+
+  ```bash
+  paperclipai plugin disable rukoz.throughput-panel
+  paperclipai plugin enable rukoz.throughput-panel
+  ```
+- **The model server restarted and the panel stopped updating.** The worker recovers on its own: a failed poll is caught, `lastError` is set, and the next interval retries — the poll loop is never torn down by a failed scrape. A counter reset (which is what a vLLM restart looks like, because the cumulative counters drop) clears the sample window, so rates read `—` for one poll and refill within about 10 s (two poll cycles); this is the same behaviour noted in [Scope and limits](#scope-and-limits) below. If the plugin **worker process** was replaced (a host restart, or the worker being respawned), an already-open browser tab can keep showing the snapshot it last received — **reload the browser page** to re-establish the UI data bridge. Reloading the page is the first thing to try, and it is cheaper than a disable/enable cycle. Only if a page reload does not help is a disable/enable cycle warranted, and the logs (`paperclipai plugin logs rukoz.throughput-panel`) are the place to look.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
 - **Wrong `model_name`.** The metrics are labelled `model_name="swift-1.5"`. If the configured `modelName` does not match, the worker logs a `no vllm metrics for model "..."` error and the panel stays empty. Set `modelName` to `swift-1.5` (or whatever label the server actually serves).
 
