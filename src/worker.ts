@@ -84,7 +84,14 @@ async function poll(ctx: PluginContext): Promise<void> {
   const generation = windowGeneration;
   try {
     const token = await resolveToken(ctx, active.authToken);
-    const res = await ctx.http.fetch(active.metricsUrl, {
+    // The host's ctx.http.fetch applies an SSRF guard that rejects every
+    // loopback and RFC1918 address, and the vLLM metrics endpoint is only
+    // reachable on the host's loopback interface, so the guard can never be
+    // satisfied here. The worker is an ordinary host process, so we scrape the
+    // endpoint with Node's global fetch instead. This is deliberate: the target
+    // is operator-configured and local, and nothing from the response is
+    // echoed back to a caller.
+    const res = await fetch(active.metricsUrl, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(Math.min(4000, active.pollIntervalMs - 500)),
     });

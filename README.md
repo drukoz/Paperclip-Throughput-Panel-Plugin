@@ -99,9 +99,9 @@ For the config route, the `authToken` value may be either a literal string or a 
 
 The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.**
 
-### Environment-variable fallback
+### Environment variables (dev server only)
 
-The worker reads these variables from the Paperclip host process environment:
+The worker reads these variables:
 
 | Variable | Overrides |
 | --- | --- |
@@ -109,7 +109,9 @@ The worker reads these variables from the Paperclip host process environment:
 | `THROUGHPUT_METRICS_TOKEN` | `authToken` |
 | `THROUGHPUT_MODEL_NAME` | `modelName` |
 
-Use these as the fallback if the company-scoped config read is not available to the worker. Company-scoped config needs an active company scope, while the poll loop is instance-wide — so if the panel reports a config warning in `GET .../logs` (see below), the env vars are the reliable path.
+They are **not** delivered by the Paperclip host. The host builds each plugin worker's environment from scratch (a minimal set: `PATH`, `NODE_PATH`, `PAPERCLIP_PLUGIN_ID`, `NODE_ENV`, `TZ`, and a couple of deployment-mode variables) and deliberately does not forward its own `process.env` into the worker. So for an installed plugin these variables are always empty, and they are only useful when running the worker outside the host, such as under the plugin SDK dev server.
+
+For an installed plugin, **operator config is the only supported way** to set `metricsUrl`, `authToken`, and `modelName` — see [Configure](#configure).
 
 ## Verify
 
@@ -152,6 +154,7 @@ curl -s -X POST http://127.0.0.1:3100/api/plugins/rukoz.throughput-panel/disable
 ```
 
 - **Panel shows "Model server unreachable".** The worker cannot reach the endpoint. Check the endpoint directly (`curl -s http://127.0.0.1:18081/metrics`), check the configured `metricsUrl`, and check the token (a 401/403 from the endpoint means the token is missing or wrong).
+- **Panel shows "Model server unreachable" with an error mentioning "private/reserved ranges".** The worker is routing through the host's guarded HTTP client instead of scraping directly; that is the bug fixed in RUK-52, so make sure the installed build includes it.
 - **Panel shows "Panel unavailable".** The worker itself is not responding. Check `GET /api/plugins/rukoz.throughput-panel/logs` for worker errors, and consider a disable/enable cycle to restart it.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
 - **Wrong `model_name`.** The metrics are labelled `model_name="swift-1.5"`. If the configured `modelName` does not match, the worker logs a `no vllm metrics for model "..."` error and the panel stays empty. Set `modelName` to `swift-1.5` (or whatever label the server actually serves).
