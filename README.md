@@ -158,6 +158,12 @@ paperclipai plugin disable rukoz.throughput-panel   # disable a running plugin w
 paperclipai plugin target                         # show which instance plugin commands talk to
 ```
 
+The CLI only carries a board credential once it has been connected as a board operator. If these commands also answer `403 Board access required`, the CLI is falling back to an agent key (or no key); connect it once and retry:
+
+```bash
+paperclipai connect --persona board
+```
+
 - **Panel shows "Model server unreachable".** The worker cannot reach the endpoint. Check the endpoint directly (`curl -s http://127.0.0.1:18081/metrics`), check the configured `metricsUrl`, and check the token (a 401/403 from the endpoint means the token is missing or wrong).
 - **Panel shows "Model server unreachable" with an error mentioning "private/reserved ranges".** The worker is routing through the host's guarded HTTP client instead of scraping directly; that is the bug fixed in RUK-52, so make sure the installed build includes it.
 - **Panel shows "Panel unavailable".** The worker itself is not responding. Check the logs for worker errors with `paperclipai plugin logs rukoz.throughput-panel`, then restart it with a disable/enable cycle:
