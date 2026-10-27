@@ -2,21 +2,22 @@
 
 ## What it is
 
-A Paperclip plugin that shows a live tokens/sec readout for the local vLLM model server, as a small floating panel in the Paperclip UI. It polls the server's Prometheus metrics endpoint from a worker on the Paperclip host and renders generation and prompt throughput, request counts, cache stats, and a short sparkline. The plugin id is `rukoz.throughput-panel`.
+A Paperclip plugin that shows a live tokens/sec readout for the local vLLM model server, as a small floating panel in the Paperclip UI. It polls the server's Prometheus metrics endpoint from a worker on the Paperclip host and renders generation and prompt throughput, request counts, cache stats, and a generation tok/s graph over a selectable window. The plugin id is `rukoz.throughput-panel`.
 
 The panel shows:
 
-- Generation and prompt tok/s, with a 1-minute average
+- Generation and prompt tok/s, with an average over a selectable window (1m / 5m / 15m)
 - Requests running and waiting
 - KV cache usage
 - Prefix-cache hit rate
 - MTP (speculative decoding) acceptance rate
-- A 5-minute generation tok/s sparkline
+- A generation tok/s sparkline covering the selected window
+- The selected window, remembered across reloads in `localStorage`
 - An explicit "Model server unreachable" state when the endpoint cannot be reached
 
 ## How it works
 
-The worker polls the metrics endpoint every 5 s by default (configurable via `pollIntervalMs`, clamped to 1–60 s), keeps a 5-minute window of samples, and computes rates from counter deltas between samples. The UI is an `appShellOverlay` slot that reads a snapshot from the worker over the plugin bridge every 5 s.
+The worker polls the metrics endpoint every 5 s by default (configurable via `pollIntervalMs`, clamped to 1–60 s), keeps a 15-minute window of samples — 15 minutes is the longest selectable average window — and computes rates from counter deltas between samples. The UI is an `appShellOverlay` slot that reads a snapshot from the worker over the plugin bridge every 5 s. The panel defaults to the 5m window; it slices the snapshot's sparkline to the selected window client-side, so switching windows needs no round trip to the worker.
 
 Polling happens worker-side because the browser cannot reach `127.0.0.1:18081` on the Paperclip host — the endpoint is bound to the host's loopback, so only a process running on that host can scrape it.
 
@@ -174,6 +175,7 @@ paperclipai connect --persona board
   ```
 - **The model server restarted and the panel stopped updating.** The worker recovers on its own: a failed poll is caught, `lastError` is set, and the next interval retries — the poll loop is never torn down by a failed scrape. A counter reset (which is what a vLLM restart looks like, because the cumulative counters drop) clears the sample window, so rates read `—` for one poll and refill within about 10 s (two poll cycles); this is the same behaviour noted in [Scope and limits](#scope-and-limits) below. If the plugin **worker process** was replaced (a host restart, or the worker being respawned), an already-open browser tab can keep showing the snapshot it last received — **reload the browser page** to re-establish the UI data bridge. Reloading the page is the first thing to try, and it is cheaper than a disable/enable cycle. Only if a page reload does not help is a disable/enable cycle warranted, and the logs (`paperclipai plugin logs rukoz.throughput-panel`) are the place to look.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
+- **Selecting 15m right after the worker starts shows a smaller average.** The worker averages over whatever history it has retained so far, so before 15 minutes have accumulated the readout covers that shorter span — the average's tooltip says how many seconds of history it has. The graph fills in over the following minutes as more samples arrive.
 - **Wrong `model_name`.** The metrics are labelled `model_name="swift-1.5"`. If the configured `modelName` does not match, the worker logs a `no vllm metrics for model "..."` error and the panel stays empty. Set `modelName` to `swift-1.5` (or whatever label the server actually serves).
 
 ## Project layout
@@ -186,20 +188,22 @@ src/
   snapshot.ts          Builds the ThroughputSnapshot served to the UI from the sample window
   snapshot.test.ts     Tests for snapshot building
   types.ts             Shared types: MetricsSample, ThroughputSnapshot, rates, sparkline points
+  windows.ts           Selectable window contract: the 1m / 5m / 15m keys and their lengths in ms
   metrics/
     parse.ts           Prometheus text-format parser and vLLM sample selector
     parse.test.ts      Tests for the parser and selector
-    rates.ts           5-minute ThroughputWindow; rates computed from counter deltas
+    rates.ts           15-minute ThroughputWindow; rates computed from counter deltas
     rates.test.ts      Tests for the window and rate math
   ui/
     index.tsx          ThroughputPanel widget rendered in the appShellOverlay slot
     format.ts          Display formatters for rates, percentages, counts, and ages
     format.test.ts     Tests for the formatters
-    Sparkline.tsx      SVG sparkline for the 5-minute generation rate
+    window.ts          Slices the snapshot to the selected window; captions and average tooltip
+    Sparkline.tsx      SVG sparkline for the generation rate over the selected window
 ```
 
 ## Scope and limits
 
 - The panel is fixed bottom-right; it is not draggable or resizable.
-- The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started, not windowed to the last 5 minutes.
+- The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started; the average-window selector does not affect them.
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
