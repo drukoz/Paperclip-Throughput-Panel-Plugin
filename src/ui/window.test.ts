@@ -39,10 +39,13 @@ test("windowCaption describes each selectable window", () => {
 });
 
 test("averageTitle notes when history is shorter than the window", () => {
-  assert.equal(averageTitle("5m", 40_000), "only 40s of history so far");
+  assert.equal(
+    averageTitle("5m", 40_000),
+    "only 40s of history so far, idle time excluded",
+  );
 });
 
 test("averageTitle reports the trailing average for full and unknown history", () => {
-  assert.equal(averageTitle("5m", 600_000), "trailing 5m average");
-  assert.equal(averageTitle("5m", null), "trailing 5m average");
+  assert.equal(averageTitle("5m", 600_000), "trailing 5m average, idle time excluded");
+  assert.equal(averageTitle("5m", null), "trailing 5m average, idle time excluded");
 });

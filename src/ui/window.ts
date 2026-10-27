@@ -25,15 +25,16 @@ export function windowCaption(key: AverageWindowKey): string {
 }
 
 /**
- * Tooltip for the average readout. The worker averages over whatever history
- * it has, so say so when that is shorter than the selected window.
+ * Tooltip for the average readout. The average covers only the intervals in
+ * which tokens were produced, so idle time does not drag it down — say so,
+ * and say when the retained history is shorter than the selected window.
  */
 export function averageTitle(
   key: AverageWindowKey,
   historySpanMs: number | null,
 ): string {
   if (historySpanMs !== null && historySpanMs < AVERAGE_WINDOW_MS[key]) {
-    return `only ${Math.round(historySpanMs / 1000)}s of history so far`;
+    return `only ${Math.round(historySpanMs / 1000)}s of history so far, idle time excluded`;
   }
-  return `trailing ${key} average`;
+  return `trailing ${key} average, idle time excluded`;
 }

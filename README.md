@@ -6,7 +6,7 @@ A Paperclip plugin that shows a live tokens/sec readout for the local vLLM model
 
 The panel shows:
 
-- Generation and prompt tok/s, with an average over a selectable window (1m / 5m / 15m)
+- Generation and prompt tok/s, with an average over a selectable window (1m / 5m / 15m) that counts only the time the server was producing tokens
 - Requests running and waiting
 - KV cache usage
 - Prefix-cache hit rate
@@ -17,7 +17,7 @@ The panel shows:
 
 ## How it works
 
-The worker polls the metrics endpoint every 5 s by default (configurable via `pollIntervalMs`, clamped to 1–60 s), keeps a 15-minute window of samples — 15 minutes is the longest selectable average window — and computes rates from counter deltas between samples. The UI is an `appShellOverlay` slot that reads a snapshot from the worker over the plugin bridge every 5 s. The panel defaults to the 5m window; it slices the snapshot's sparkline to the selected window client-side, so switching windows needs no round trip to the worker.
+The worker polls the metrics endpoint every 5 s by default (configurable via `pollIntervalMs`, clamped to 1–60 s), keeps a 15-minute window of samples — 15 minutes is the longest selectable average window — and computes rates from counter deltas between samples. The UI is an `appShellOverlay` slot that reads a snapshot from the worker over the plugin bridge every 5 s. The panel defaults to the 5m window; it slices the snapshot's sparkline to the selected window client-side, so switching windows needs no round trip to the worker. The windowed average divides tokens by the time spent producing them: intervals in which a counter did not move are left out of both the token total and the elapsed time, so an idle stretch leaves the average at the rate the server last sustained instead of pulling it toward zero. The large readout and the sparkline are unfiltered, so idle time still shows up as 0 tok/s there.
 
 Polling happens worker-side because the browser cannot reach `127.0.0.1:18081` on the Paperclip host — the endpoint is bound to the host's loopback, so only a process running on that host can scrape it.
 
@@ -207,3 +207,4 @@ src/
 - The panel is fixed bottom-right; it is not draggable or resizable.
 - The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started; the average-window selector does not affect them.
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
+- The windowed average skips intervals with no tokens, so it is an average of active throughput, not of wall-clock time; a window in which nothing ran at all reads `0`. The instantaneous readout and the sparkline are not filtered this way.
