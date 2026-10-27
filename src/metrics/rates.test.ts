@@ -111,6 +111,19 @@ test("averageRates over a uniform 60s series is 100 tok/s", () => {
   assert.equal(instant.generation, 100);
 });
 
+test("averageRates reads the same steady rate over 1m and 15m windows", () => {
+  const w = new ThroughputWindow();
+  for (let i = 0; i < 25; i++) {
+    w.push(sample(i * 5000, { generationTokens: i * 500 }));
+  }
+  const one = w.averageRates(60_000);
+  const fifteen = w.averageRates(900_000);
+  assert.ok(one);
+  assert.ok(fifteen);
+  assert.equal(one.generation, 100);
+  assert.equal(fifteen.generation, 100);
+});
+
 test("averageRates smooths a spiky last interval", () => {
   const w = new ThroughputWindow();
   for (let i = 0; i < 12; i++) {

@@ -84,6 +84,31 @@ test("historySpanMs is newest minus oldest, null with a single sample", () => {
   assert.equal(singleSnap.historySpanMs, null);
 });
 
+test("historySpanMs is set for starting and unreachable statuses", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0));
+  w.push(sample(5000));
+  w.push(sample(12000));
+
+  const starting = buildSnapshot({
+    window: w,
+    lastError: null,
+    started: false,
+    modelName: null,
+  });
+  assert.equal(starting.status, "starting");
+  assert.equal(starting.historySpanMs, 12000);
+
+  const unreachable = buildSnapshot({
+    window: w,
+    lastError: "boom",
+    started: true,
+    modelName: null,
+  });
+  assert.equal(unreachable.status, "unreachable");
+  assert.equal(unreachable.historySpanMs, 12000);
+});
+
 test("kv cache usage is reported as a percentage", () => {
   const w = new ThroughputWindow();
   w.push(sample(0, { kvCacheUsage: 0.42 }));

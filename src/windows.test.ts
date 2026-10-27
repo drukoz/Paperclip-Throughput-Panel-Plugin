@@ -17,6 +17,12 @@ test("every window key has a positive length in ms", () => {
   }
 });
 
+test("the window lengths are 60s, 5min and 15min in ms", () => {
+  assert.equal(AVERAGE_WINDOW_MS["1m"], 60_000);
+  assert.equal(AVERAGE_WINDOW_MS["5m"], 300_000);
+  assert.equal(AVERAGE_WINDOW_MS["15m"], 900_000);
+});
+
 test("MAX_AVERAGE_WINDOW_MS is the largest window length", () => {
   const largest = Math.max(...AVERAGE_WINDOW_KEYS.map((key) => AVERAGE_WINDOW_MS[key]));
   assert.equal(MAX_AVERAGE_WINDOW_MS, largest);
