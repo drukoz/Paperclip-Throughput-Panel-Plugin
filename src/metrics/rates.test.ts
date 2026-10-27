@@ -148,6 +148,75 @@ test("averageRates falls back to the previous sample when nothing else is in the
   assert.equal(avg.generation, 5);
 });
 
+test("averageRates ignores an idle tail", () => {
+  const w = new ThroughputWindow();
+  for (let i = 0; i < 13; i++) {
+    w.push(sample(i * 5000, { generationTokens: i * 500 }));
+  }
+  for (let i = 13; i < 25; i++) {
+    w.push(sample(i * 5000, { generationTokens: 12 * 500 }));
+  }
+  const avg = w.averageRates(900_000);
+  assert.ok(avg);
+  assert.equal(avg.generation, 100);
+  const instant = w.instantRates();
+  assert.ok(instant);
+  assert.equal(instant.generation, 0);
+});
+
+test("averageRates ignores idle gaps in the middle of a window", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { generationTokens: 0 }));
+  w.push(sample(5000, { generationTokens: 500 }));
+  w.push(sample(10000, { generationTokens: 500 }));
+  w.push(sample(15000, { generationTokens: 1000 }));
+  const avg = w.averageRates(60_000);
+  assert.ok(avg);
+  assert.equal(avg.generation, 100);
+});
+
+test("averageRates weights active intervals by their own duration", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { generationTokens: 0 }));
+  w.push(sample(5000, { generationTokens: 500 }));
+  w.push(sample(10000, { generationTokens: 500 }));
+  w.push(sample(20000, { generationTokens: 1000 }));
+  const avg = w.averageRates(60_000);
+  assert.ok(avg);
+  assert.ok(Math.abs(avg.generation - 1000 / 15) < 1e-9);
+});
+
+test("averageRates reads 0 when the window is entirely idle", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { generationTokens: 500, promptTokens: 200 }));
+  w.push(sample(5000, { generationTokens: 500, promptTokens: 200 }));
+  w.push(sample(10000, { generationTokens: 500, promptTokens: 200 }));
+  const avg = w.averageRates(60_000);
+  assert.ok(avg);
+  assert.equal(avg.generation, 0);
+  assert.equal(avg.prompt, 0);
+});
+
+test("averageRates excludes idle intervals per series", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { generationTokens: 0, promptTokens: 0 }));
+  w.push(sample(5000, { generationTokens: 0, promptTokens: 400 }));
+  w.push(sample(10000, { generationTokens: 500, promptTokens: 400 }));
+  const avg = w.averageRates(60_000);
+  assert.ok(avg);
+  assert.equal(avg.generation, 100);
+  assert.equal(avg.prompt, 80);
+});
+
+test("averageRates still spans a single long interval when nothing else is in the window", () => {
+  const w = new ThroughputWindow({ retentionMs: 600_000 });
+  w.push(sample(0, { generationTokens: 0 }));
+  w.push(sample(200_000, { generationTokens: 1000 }));
+  const avg = w.averageRates(60_000);
+  assert.ok(avg);
+  assert.equal(avg.generation, 5);
+});
+
 test("retention prunes samples older than the window", () => {
   const w = new ThroughputWindow({ retentionMs: 10_000 });
   for (const t of [0, 5000, 10000, 15000, 20000]) {

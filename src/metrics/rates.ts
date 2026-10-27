@@ -76,22 +76,55 @@ export class ThroughputWindow {
     return rateBetween(this.samples[n - 2]!, this.samples[n - 1]!);
   }
 
+  /**
+   * Generation and prompt tok/s averaged over the *active* intervals inside
+   * the trailing `windowMs`: an interval counts for a series only when that
+   * series' counter advanced across it, so idle gaps dilute neither rate.
+   * Null with fewer than two samples. A series with no active interval in
+   * the window reads 0.
+   */
   averageRates(windowMs: number = 60_000): RatePair | null {
     const n = this.samples.length;
     if (n < 2) return null;
     const newest = this.samples[n - 1]!;
     const cutoff = newest.at - windowMs;
-    let base = newest;
-    for (const candidate of this.samples) {
-      if (candidate.at >= cutoff) {
-        base = candidate;
+
+    // Start at the first interval whose opening sample is inside the window.
+    // When no sample but `newest` is (one long gap), average the final
+    // interval alone rather than reporting nothing.
+    let first = n - 2;
+    for (let i = 0; i < n - 1; i++) {
+      if (this.samples[i]!.at >= cutoff) {
+        first = i;
         break;
       }
     }
-    if (base === newest) {
-      base = this.samples[n - 2]!;
+
+    let generationTokens = 0;
+    let generationSeconds = 0;
+    let promptTokens = 0;
+    let promptSeconds = 0;
+    for (let i = first + 1; i < n; i++) {
+      const a = this.samples[i - 1]!;
+      const b = this.samples[i]!;
+      const dt = (b.at - a.at) / 1000;
+      if (dt <= 0) continue;
+      const generation = b.generationTokens - a.generationTokens;
+      if (generation > 0) {
+        generationTokens += generation;
+        generationSeconds += dt;
+      }
+      const prompt = b.promptTokens - a.promptTokens;
+      if (prompt > 0) {
+        promptTokens += prompt;
+        promptSeconds += dt;
+      }
     }
-    return rateBetween(base, newest);
+
+    return {
+      generation: generationSeconds > 0 ? generationTokens / generationSeconds : 0,
+      prompt: promptSeconds > 0 ? promptTokens / promptSeconds : 0,
+    };
   }
 
   cumulativeRates(): {

@@ -51,9 +51,11 @@ export interface ThroughputSnapshot {
   /** tok/s over the most recent poll interval. Null until two samples exist. */
   instant: RatePair | null;
   /**
-   * tok/s averaged over each selectable trailing window. An entry is null
+   * tok/s averaged over each selectable trailing window, counting only the
+   * intervals in which tokens were produced — idle gaps are excluded, so the
+   * readout is throughput while the server was working. An entry is null
    * until the history holds two samples, and every entry is null when the
-   * status is not `ok`.
+   * status is not `ok`. A window with no token-producing interval reads 0.
    */
   averages: Record<AverageWindowKey, RatePair | null>;
   /** Span of retained history in ms (newest sample minus oldest), or null with fewer than two samples. */
