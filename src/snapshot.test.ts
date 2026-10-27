@@ -149,3 +149,60 @@ test("model name passes through unchanged", () => {
   const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: "swift-1.5" });
   assert.equal(snap.modelName, "swift-1.5");
 });
+
+function pushSixtySecondsThenIdleTail(w: ThroughputWindow): void {
+  for (let i = 0; i <= 12; i++) {
+    w.push(sample(i * 5000, { generationTokens: i * 500 }));
+  }
+  for (let i = 13; i <= 37; i++) {
+    w.push(sample(i * 5000, { generationTokens: 6000 }));
+  }
+}
+
+test("an idle tail does not drag the snapshot averages down", () => {
+  const w = new ThroughputWindow();
+  pushSixtySecondsThenIdleTail(w);
+  const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
+  assert.equal(snap.status, "ok");
+  assert.equal(snap.averages["1m"]!.generation, 0);
+  assert.equal(snap.averages["5m"]!.generation, 100);
+  assert.equal(snap.averages["15m"]!.generation, 100);
+  assert.ok(snap.instant);
+  assert.equal(snap.instant.generation, 0);
+  assert.equal(snap.sparkline[snap.sparkline.length - 1]!.tokensPerSec, 0);
+});
+
+test("a fully idle window reads 0, not null", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0));
+  w.push(sample(5000));
+  w.push(sample(10000));
+  const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
+  assert.equal(snap.status, "ok");
+  for (const key of ["1m", "5m", "15m"] as const) {
+    assert.ok(snap.averages[key]);
+    assert.equal(snap.averages[key]!.generation, 0);
+    assert.equal(snap.averages[key]!.prompt, 0);
+  }
+});
+
+test("averages stay null when the status is not ok", () => {
+  const w = new ThroughputWindow();
+  pushSixtySecondsThenIdleTail(w);
+  const starting = buildSnapshot({
+    window: w,
+    lastError: null,
+    started: false,
+    modelName: null,
+  });
+  assert.equal(starting.status, "starting");
+  assert.deepEqual(starting.averages, { "1m": null, "5m": null, "15m": null });
+  const unreachable = buildSnapshot({
+    window: w,
+    lastError: "boom",
+    started: true,
+    modelName: null,
+  });
+  assert.equal(unreachable.status, "unreachable");
+  assert.deepEqual(unreachable.averages, { "1m": null, "5m": null, "15m": null });
+});
