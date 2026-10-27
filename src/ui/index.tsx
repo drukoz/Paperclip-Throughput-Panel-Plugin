@@ -3,10 +3,15 @@ import type { CSSProperties } from "react";
 import { usePluginData } from "@paperclipai/plugin-sdk/ui";
 import type { PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
 import type { ThroughputSnapshot } from "../types.ts";
+import type { AverageWindowKey } from "../windows.ts";
+import { AVERAGE_WINDOW_KEYS, AVERAGE_WINDOW_MS, isAverageWindowKey } from "../windows.ts";
 import { Sparkline } from "./Sparkline.tsx";
 import { formatAge, formatCount, formatPct, formatRate } from "./format.ts";
+import { averageTitle, pointsInWindow, windowCaption } from "./window.ts";
 
 const COLLAPSED_KEY = "rukoz.throughput-panel.collapsed";
+const WINDOW_KEY = "rukoz.throughput-panel.window";
+const DEFAULT_WINDOW: AverageWindowKey = "5m";
 
 const FONT_STACK =
   'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
@@ -58,6 +63,26 @@ const collapseBtn: CSSProperties = {
   padding: 2,
   margin: 0,
   borderRadius: 4,
+};
+
+const windowBtn: CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 5,
+  color: MUTED,
+  cursor: "pointer",
+  fontFamily: FONT_STACK,
+  fontSize: 10,
+  lineHeight: 1.2,
+  padding: "1px 6px",
+  margin: 0,
+};
+
+const windowBtnOn: CSSProperties = {
+  ...windowBtn,
+  background: "rgba(255,255,255,0.14)",
+  borderColor: "rgba(255,255,255,0.28)",
+  color: "#fafafa",
 };
 
 const errMsg: CSSProperties = {
@@ -143,6 +168,34 @@ function SparklineBlock({
   );
 }
 
+function WindowSelector({
+  selected,
+  onSelect,
+}: {
+  selected: AverageWindowKey;
+  onSelect: (key: AverageWindowKey) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Average window"
+      style={{ display: "flex", gap: 4, marginTop: 6 }}
+    >
+      {AVERAGE_WINDOW_KEYS.map((key) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onSelect(key)}
+          aria-pressed={key === selected}
+          style={key === selected ? windowBtnOn : windowBtn}
+        >
+          {key}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function ThroughputPanel({ context }: PluginWidgetProps) {
   const { data, error, refresh } = usePluginData<ThroughputSnapshot>("throughput");
 
@@ -158,6 +211,24 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
       return false;
     }
   });
+
+  const [windowKey, setWindowKey] = useState<AverageWindowKey>(() => {
+    try {
+      const stored = window.localStorage.getItem(WINDOW_KEY);
+      return isAverageWindowKey(stored) ? stored : DEFAULT_WINDOW;
+    } catch {
+      return DEFAULT_WINDOW;
+    }
+  });
+
+  function selectWindow(key: AverageWindowKey) {
+    setWindowKey(key);
+    try {
+      window.localStorage.setItem(WINDOW_KEY, key);
+    } catch {
+      // localStorage can throw in locked-down contexts; the selection still applies in-memory.
+    }
+  }
 
   function toggleCollapsed() {
     setCollapsed((prev) => {
@@ -286,11 +357,18 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                     </span>
                     <span style={{ color: MUTED, marginLeft: 3 }}>tok/s</span>
                   </div>
-                  <span style={{ color: MUTED }}>
-                    1m avg {formatRate(data.averages["1m"]?.generation)}
+                  <span
+                    style={{ color: MUTED }}
+                    title={averageTitle(windowKey, data.historySpanMs)}
+                  >
+                    {windowKey} avg {formatRate(data.averages[windowKey]?.generation)}
                   </span>
                 </div>
-                <SparklineBlock points={data.sparkline} caption="last 5 min" />
+                <WindowSelector selected={windowKey} onSelect={selectWindow} />
+                <SparklineBlock
+                  points={pointsInWindow(data.sparkline, AVERAGE_WINDOW_MS[windowKey])}
+                  caption={windowCaption(windowKey)}
+                />
                 <StatGrid data={data} />
                 <div style={{ color: MUTED, fontSize: 10, marginTop: 6 }}>
                   {data.modelName ?? "—"} · {formatAge(data.lastSampleAt)}
@@ -303,9 +381,10 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                   <span style={{ fontWeight: 600 }}>Model server unreachable</span>
                 </div>
                 {data.error ? <div style={errMsg}>{data.error}</div> : null}
+                <WindowSelector selected={windowKey} onSelect={selectWindow} />
                 <SparklineBlock
-                  points={data.sparkline}
-                  caption="last 5 min (stale)"
+                  points={pointsInWindow(data.sparkline, AVERAGE_WINDOW_MS[windowKey])}
+                  caption={`${windowCaption(windowKey)} (stale)`}
                 />
                 <div style={{ color: MUTED, fontSize: 10, marginTop: 6 }}>
                   last seen {formatAge(data.lastSampleAt)}
