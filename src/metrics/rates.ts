@@ -1,7 +1,8 @@
 import type { MetricsSample, RatePair, SparklinePoint } from "../types.ts";
+import { MAX_AVERAGE_WINDOW_MS } from "../windows.ts";
 
 export interface ThroughputWindowOptions {
-  /** How much history to retain, in ms. Defaults to 300_000 (5 minutes). */
+  /** How much history to retain, in ms. Defaults to MAX_AVERAGE_WINDOW_MS (15 minutes). */
   retentionMs?: number;
 }
 
@@ -32,7 +33,7 @@ export class ThroughputWindow {
   private samples: MetricsSample[];
 
   constructor(options?: ThroughputWindowOptions) {
-    this.retentionMs = options?.retentionMs ?? 300_000;
+    this.retentionMs = options?.retentionMs ?? MAX_AVERAGE_WINDOW_MS;
     this.samples = [];
   }
 
@@ -60,6 +61,13 @@ export class ThroughputWindow {
 
   latest(): MetricsSample | null {
     return this.samples[this.samples.length - 1] ?? null;
+  }
+
+  /** Span of retained history in ms, or null with fewer than two samples. */
+  spanMs(): number | null {
+    const n = this.samples.length;
+    if (n < 2) return null;
+    return this.samples[n - 1]!.at - this.samples[0]!.at;
   }
 
   instantRates(): RatePair | null {

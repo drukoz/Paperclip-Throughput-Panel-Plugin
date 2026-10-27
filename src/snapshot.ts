@@ -1,4 +1,6 @@
-import type { ThroughputSnapshot } from "./types.ts";
+import type { RatePair, ThroughputSnapshot } from "./types.ts";
+import type { AverageWindowKey } from "./windows.ts";
+import { AVERAGE_WINDOW_KEYS, AVERAGE_WINDOW_MS } from "./windows.ts";
 import { ThroughputWindow } from "./metrics/rates.ts";
 
 export interface SnapshotInput {
@@ -9,6 +11,10 @@ export interface SnapshotInput {
   started: boolean;
   /** `model_name` label from the last successful scrape. */
   modelName: string | null;
+}
+
+function emptyAverages(): Record<AverageWindowKey, RatePair | null> {
+  return { "1m": null, "5m": null, "15m": null };
 }
 
 export function buildSnapshot(input: SnapshotInput): ThroughputSnapshot {
@@ -31,19 +37,22 @@ export function buildSnapshot(input: SnapshotInput): ThroughputSnapshot {
     lastSampleAt: latest === null ? null : new Date(latest.at).toISOString(),
     error: lastError,
     instant: null,
-    average1m: null,
+    averages: emptyAverages(),
     numRequestsRunning: null,
     numRequestsWaiting: null,
     kvCacheUsagePct: null,
     prefixCacheHitRatePct: cumulative.prefixCacheHitRatePct,
     mtpAcceptanceRatePct: cumulative.mtpAcceptanceRatePct,
     sparkline: window.sparkline(),
+    historySpanMs: window.spanMs(),
     modelName,
   };
 
   if (status === "ok" && latest !== null) {
     snapshot.instant = window.instantRates();
-    snapshot.average1m = window.averageRates(60_000);
+    for (const key of AVERAGE_WINDOW_KEYS) {
+      snapshot.averages[key] = window.averageRates(AVERAGE_WINDOW_MS[key]);
+    }
     snapshot.numRequestsRunning = latest.numRequestsRunning;
     snapshot.numRequestsWaiting = latest.numRequestsWaiting;
     snapshot.kvCacheUsagePct = latest.kvCacheUsage * 100;

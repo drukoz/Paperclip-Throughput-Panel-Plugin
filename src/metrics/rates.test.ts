@@ -151,6 +151,29 @@ test("retention never prunes below two samples", () => {
   assert.equal(w.size(), 2);
 });
 
+test("default retention keeps 15 minutes of history", () => {
+  const w = new ThroughputWindow();
+  for (const t of [0, 500_000, 900_000, 1_000_000]) {
+    w.push(sample(t));
+  }
+  assert.equal(w.sparkline()[0]!.at, 900_000);
+});
+
+test("spanMs is null with fewer than two samples, newest minus oldest with three", () => {
+  const empty = new ThroughputWindow();
+  assert.equal(empty.spanMs(), null);
+
+  const single = new ThroughputWindow();
+  single.push(sample(1000));
+  assert.equal(single.spanMs(), null);
+
+  const w = new ThroughputWindow();
+  w.push(sample(0));
+  w.push(sample(5000));
+  w.push(sample(12000));
+  assert.equal(w.spanMs(), 12000);
+});
+
 test("cumulative rates are percentages of the latest sample", () => {
   const w = new ThroughputWindow();
   w.push(

@@ -1,3 +1,5 @@
+import type { AverageWindowKey } from "./windows.ts";
+
 /** One parsed scrape of the vLLM `/metrics` endpoint. */
 export interface MetricsSample {
   /** `Date.now()` when the scrape completed, in ms. */
@@ -48,8 +50,14 @@ export interface ThroughputSnapshot {
   error: string | null;
   /** tok/s over the most recent poll interval. Null until two samples exist. */
   instant: RatePair | null;
-  /** tok/s averaged over the trailing 60s. Null until the window holds two samples. */
-  average1m: RatePair | null;
+  /**
+   * tok/s averaged over each selectable trailing window. An entry is null
+   * until the history holds two samples, and every entry is null when the
+   * status is not `ok`.
+   */
+  averages: Record<AverageWindowKey, RatePair | null>;
+  /** Span of retained history in ms (newest sample minus oldest), or null with fewer than two samples. */
+  historySpanMs: number | null;
   numRequestsRunning: number | null;
   numRequestsWaiting: number | null;
   /** KV cache usage as a percentage, 0..100. */
@@ -58,7 +66,7 @@ export interface ThroughputSnapshot {
   prefixCacheHitRatePct: number | null;
   /** Cumulative MTP (speculative decode) acceptance rate as a percentage, 0..100. */
   mtpAcceptanceRatePct: number | null;
-  /** Generation tok/s for the trailing 5 minutes, oldest first. */
+  /** Generation tok/s over the full retained history (up to 15 minutes), oldest first. */
   sparkline: SparklinePoint[];
   /** `model_name` label the sample was read from, or null. */
   modelName: string | null;

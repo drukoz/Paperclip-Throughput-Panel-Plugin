@@ -287,7 +287,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                     <span style={{ color: MUTED, marginLeft: 3 }}>tok/s</span>
                   </div>
                   <span style={{ color: MUTED }}>
-                    1m avg {formatRate(data.average1m?.generation)}
+                    1m avg {formatRate(data.averages["1m"]?.generation)}
                   </span>
                 </div>
                 <SparklineBlock points={data.sparkline} caption="last 5 min" />
