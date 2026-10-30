@@ -1,9 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { PlanUsageResult, PlanUsageView, UsageLimit } from "./types.ts";
+import type {
+  PlanUsageReading,
+  PlanUsageResult,
+  PlanUsageView,
+  StoredPlanUsage,
+  UsageLimit,
+} from "./types.ts";
 import {
   PLAN_USAGE_POLL_MS,
   PLAN_USAGE_RATE_LIMITED_POLL_MS,
+  RATE_LIMITED_NOTE,
+  buildPlanUsageView,
+  checkNote,
+  mergeReadings,
+  newerReading,
   nextPlanUsageDelayMs,
   reducePlanUsageView,
 } from "./view.ts";
@@ -94,15 +105,6 @@ test("reducePlanUsageView switches the ok view to no_connection and needs_attent
     { kind: "needs_attention", accountLabel: "owner@example.com", message: "Reconnect Claude in AI connections" },
   );
 });
-
-import type { PlanUsageReading, StoredPlanUsage } from "./types.ts";
-import {
-  RATE_LIMITED_NOTE,
-  buildPlanUsageView,
-  checkNote,
-  mergeReadings,
-  newerReading,
-} from "./view.ts";
 
 const RUN_READING: PlanUsageReading = { source: "agent_run", at: "2026-10-30T02:40:00.000Z", usage: { session: { usedPercent: 13, resetsAt: "2026-10-30T04:20:00.000Z" }, weekly: { usedPercent: 4, resetsAt: "2026-11-05T16:00:00.000Z" }, fable: null } };
 const CHECK_READING: PlanUsageReading = { source: "usage_check", at: "2026-10-30T02:30:00.000Z", usage: { session: { usedPercent: 10, resetsAt: "2026-10-30T04:20:00.000Z" }, weekly: { usedPercent: 3, resetsAt: "2026-11-05T16:00:00.000Z" }, fable: { usedPercent: 20, resetsAt: "2026-11-05T16:00:00.000Z" } } };
