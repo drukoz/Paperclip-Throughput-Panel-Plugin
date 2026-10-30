@@ -3,6 +3,7 @@ import { fetchPlanUsage } from "../usage/client.ts";
 import { fetchRunPlanUsage } from "../usage/run-client.ts";
 import type { RunLogMemo } from "../usage/run-client.ts";
 import {
+  PLAN_USAGE_RATE_LIMITED_CHECK_MS,
   applyCheckResult,
   isCheckDue,
   loadStoredPlanUsage,
@@ -20,7 +21,7 @@ import type {
 
 export interface PlanUsageHandle {
   view: PlanUsageView;
-  /** Check now, unless the last check was under 10 s ago. */
+  /** Re-read the agent runs now, and force a usage check when the last attempt is at least 5 min old; ignored within 10 s of the last press. */
   refresh: () => void;
 }
 
@@ -77,7 +78,7 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
 
     async function tick(): Promise<void> {
       timer = null;
-      // A hidden tab spends no requests, but keeps its heartbeat so showing it reads again at once.
+      // A hidden tab spends no requests but keeps its heartbeat, so it reads again within a minute of being shown.
       if (document.visibilityState !== "hidden") {
         controller = new AbortController();
         let reading: PlanUsageReading | null;
@@ -116,7 +117,8 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
     let waitingForVisible = false;
 
     const schedule = (ms: number) => {
-      if (!cancelled) timer = setTimeout(() => void tick(), ms);
+      // Capped: setTimeout runs a delay past 2^31 - 1 ms at once, so a nextCheckAt saved under a wrong clock would loop.
+      if (!cancelled) timer = setTimeout(() => void tick(), Math.min(ms, PLAN_USAGE_RATE_LIMITED_CHECK_MS));
     };
 
     async function tick(): Promise<void> {
@@ -142,7 +144,6 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
         accountLabel: current?.accountLabel ?? null,
         last: current?.last ?? null,
       });
-      waitingForVisible = false;
       forceCheck.current = false;
       controller = new AbortController();
       let result: PlanUsageResult;
@@ -161,6 +162,8 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
 
     const onVisibilityChange = () => {
       if (!waitingForVisible || document.visibilityState === "hidden") return;
+      // Cleared here, not at the claim: when another tab has checked meanwhile, this tick schedules a timer, and the next show must not start a second one.
+      waitingForVisible = false;
       void tick();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
