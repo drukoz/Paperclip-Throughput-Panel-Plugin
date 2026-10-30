@@ -40,3 +40,31 @@ export function formatAge(iso: string | null, now?: number): string {
   const hours = Math.floor(minutes / 60);
   return `${hours}h ago`;
 }
+
+/**
+ * ISO reset time -> "resets now" / "resets in 42m" / "resets in 3h 14m" /
+ * "resets in 2d 4h", relative to `now` (default Date.now()).
+ * Null / unparseable -> "reset time not reported".
+ */
+export function formatResetIn(iso: string | null, now?: number): string {
+  if (iso === null) return "reset time not reported";
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return "reset time not reported";
+  const ref = now ?? Date.now();
+  const minutes = Math.ceil((parsed - ref) / 60_000);
+  if (minutes <= 0) return "resets now";
+  if (minutes < 60) return `resets in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours < 24) return `resets in ${hours}h ${rest}m`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return `resets in ${days}d ${restHours}h`;
+}
+
+/** Meter colour for a percent used: >= 90 red, >= 75 amber, else green. */
+export function usageColor(usedPercent: number): string {
+  if (usedPercent >= 90) return "#ef4444";
+  if (usedPercent >= 75) return "#f59e0b";
+  return "#22c55e";
+}
