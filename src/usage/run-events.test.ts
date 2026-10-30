@@ -146,6 +146,7 @@ test("windowRow converts utilization and resetsAt, and rejects unusable values",
     resetsAt: "2026-10-30T04:20:00.000Z",
   });
   assert.deepEqual(windowRow({ utilization: 0.5 }), { usedPercent: 50, resetsAt: null });
+  assert.deepEqual(windowRow({ utilization: 0.5, resetsAt: 1e13 }), { usedPercent: 50, resetsAt: null });
   assert.equal(windowRow({ resetsAt: 1 }), null);
   assert.equal(windowRow(null), null);
   assert.equal(windowRow("x"), null);

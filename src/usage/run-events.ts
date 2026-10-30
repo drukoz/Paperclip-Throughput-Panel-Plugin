@@ -10,10 +10,9 @@ export function windowRow(value: unknown): PlanUsageRow | null {
     return null;
   }
   const rawResetsAt = (value as { resetsAt?: unknown }).resetsAt;
-  const resetsAt =
-    typeof rawResetsAt === "number" && Number.isFinite(rawResetsAt)
-      ? new Date(rawResetsAt * 1000).toISOString()
-      : null;
+  const resetsDate = new Date(typeof rawResetsAt === "number" ? rawResetsAt * 1000 : NaN);
+  // A finite resetsAt past Date's range (about 8.64e12 s) is an invalid Date too, and toISOString throws on one.
+  const resetsAt = Number.isNaN(resetsDate.getTime()) ? null : resetsDate.toISOString();
   return { usedPercent: Math.round(utilization * 10000) / 100, resetsAt };
 }
 
