@@ -40,7 +40,10 @@ function MeterRow({
     ? `${label}: ${formatPct(row.usedPercent)} used, ${formatResetIn(row.resetsAt, now)}`
     : `${label}: not reported for this account`;
   return (
+    // Screen readers ignore aria-label on a role-less div; "img" makes them
+    // read the full sentence, reset time included, instead of the bare cells.
     <div
+      role="img"
       style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}
       title={details}
       aria-label={details}
@@ -73,6 +76,10 @@ function MeterRow({
   );
 }
 
+/**
+ * The panel's "Claude plan" section: the 5-hour session, weekly and Fable
+ * weekly meters, or the reason they are missing. Presentational only.
+ */
 export function PlanUsageSection(props: {
   view: PlanUsageView;
   onRefresh?: () => void;
