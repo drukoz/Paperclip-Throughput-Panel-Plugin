@@ -14,12 +14,15 @@ The panel shows:
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`
 - An explicit "Model server unreachable" state when the endpoint cannot be reached
+- Claude plan usage for your default Claude subscription: how much of the current 5-hour session, the weekly limit and the weekly Fable limit is used, with the reset time on hover
 
 ## How it works
 
 The worker polls the metrics endpoint every 5 s by default (configurable via `pollIntervalMs`, clamped to 1–60 s), keeps a 15-minute window of samples — 15 minutes is the longest selectable average window — and computes rates from counter deltas between samples. The UI is an `appShellOverlay` slot that reads a snapshot from the worker over the plugin bridge every 5 s. The panel defaults to the 5m window; it slices the snapshot's sparkline to the selected window client-side, so switching windows needs no round trip to the worker. The windowed average divides tokens by the time spent producing them: intervals in which a counter did not move are left out of both the token total and the elapsed time, so an idle stretch leaves the average at the rate the server last sustained instead of pulling it toward zero, until the window retains no active interval at all and the average reads `0`. The large readout and the sparkline are unfiltered, so idle time still shows up as 0 tok/s there.
 
 Polling happens worker-side because the browser cannot reach `127.0.0.1:18081` on the Paperclip host — the endpoint is bound to the host's loopback, so only a process running on that host can scrape it.
+
+The Claude plan section is fetched by the panel itself, not by the worker. The UI bundle runs inside the Paperclip page with your signed-in session, so it calls Paperclip's own API: `GET /api/companies/:companyId/ai-connections` to find your default Claude subscription connection, then `GET /api/companies/:companyId/ai-connections/:connectionId/usage?grantId=…`, which asks Anthropic for that account's usage. The plugin never sees a Claude credential. The panel checks when you expand it, then every 5 minutes while it stays expanded and the tab is visible (15 minutes after Anthropic rate-limits a check); the ↻ button checks right away. Each check reads the connection's stored credential, which Paperclip records in that secret's access log, so the cadence is minutes rather than seconds.
 
 ## Build
 
@@ -173,6 +176,7 @@ paperclipai connect --persona board
   paperclipai plugin disable rukoz.throughput-panel
   paperclipai plugin enable rukoz.throughput-panel
   ```
+- **The Claude plan section says "No Claude subscription connected" or asks you to reconnect.** Open AI connections in Paperclip and connect or reconnect your Claude subscription. The section follows on its next check; ↻ checks right away.
 - **The model server restarted and the panel stopped updating.** The worker recovers on its own: a failed poll is caught, `lastError` is set, and the next interval retries — the poll loop is never torn down by a failed scrape. A counter reset (which is what a vLLM restart looks like, because the cumulative counters drop) clears the sample window, so rates read `—` for one poll and refill within about 10 s (two poll cycles); this is the same behaviour noted in [Scope and limits](#scope-and-limits) below. If the plugin **worker process** was replaced (a host restart, or the worker being respawned), an already-open browser tab can keep showing the snapshot it last received — **reload the browser page** to re-establish the UI data bridge. Reloading the page is the first thing to try, and it is cheaper than a disable/enable cycle. Only if a page reload does not help is a disable/enable cycle warranted, and the logs (`paperclipai plugin logs rukoz.throughput-panel`) are the place to look.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
 - **Selecting 15m right after the worker starts shows a smaller average.** The worker averages over whatever history it has retained so far, so before 15 minutes have accumulated the readout covers that shorter span — the average's tooltip says how many seconds of history it has. The graph fills in over the following minutes as more samples arrive.
@@ -200,6 +204,16 @@ src/
     format.test.ts     Tests for the formatters
     window.ts          Slices the snapshot to the selected window; captions and average tooltip
     Sparkline.tsx      SVG sparkline for the generation rate over the selected window
+    PlanUsageSection.tsx  The "Claude plan" section of the expanded card
+    usePlanUsage.ts    Hook that polls Claude plan usage while the card is expanded
+  usage/
+    types.ts           Claude plan usage contract: Paperclip response subsets, meters, view states
+    select.ts          Picks the 5-hour, weekly and Fable meters out of Paperclip's usage limits
+    select.test.ts     Tests for the meter selection
+    client.ts          Fetches the default Claude subscription's usage from Paperclip's API
+    client.test.ts     Tests for the client, using a fake fetch
+    view.ts            Folds check results into the section's view state; poll delays
+    view.test.ts       Tests for the view state and delays
 ```
 
 ## Scope and limits
@@ -208,3 +222,6 @@ src/
 - The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started; the average-window selector does not affect them.
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
 - The windowed average skips intervals with no tokens, so it is an average of active throughput, not of wall-clock time; a window in which nothing ran at all reads `0`. The instantaneous readout and the sparkline are not filtered this way.
+- Claude plan usage is shown only in the expanded card, not in the collapsed pill.
+- The Fable row reads the weekly window Anthropic reports for the Fable model. If the account's usage has no Fable window, the row shows `—`.
+- With several Claude subscriptions connected, the section shows your default one, as set in Paperclip's AI connections.
