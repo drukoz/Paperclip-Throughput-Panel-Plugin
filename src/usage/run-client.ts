@@ -28,6 +28,12 @@ export const RUN_LOG_TAIL_BYTES = 262_144;
 export const RUN_LOG_READ_BYTES = 524_288;
 /** How many of the newest Claude runs are searched, newest first. */
 export const RUN_LOOKBACK = 3;
+/** Bytes each step back covers when a read finds no plan-usage event. */
+export const RUN_LOG_BACK_BYTES = 524_288;
+/** How far each step back reads into the previous read, so an event line cut at its start is whole in one of the two. */
+export const RUN_LOG_OVERLAP_BYTES = 65_536;
+/** Most steps back per run and call; with the tail read, about 1.75 MiB before lastOutputBytes is searched. */
+export const RUN_LOG_BACK_STEPS = 3;
 
 /** A run row kept from the heartbeat-runs response, with the fields the reader uses. */
 interface RunRow {
@@ -35,6 +41,7 @@ interface RunRow {
   createdAt: unknown;
   logBytes: unknown;
   lastOutputBytes: unknown;
+  finishedAt: unknown;
 }
 
 /**
@@ -83,13 +90,18 @@ export async function fetchRunPlanUsage(
       }
       for (const row of runsBody) {
         if (isRecord(row) && typeof row.id === "string") {
-          runs.push({ id: row.id, createdAt: row.createdAt, logBytes: row.logBytes, lastOutputBytes: row.lastOutputBytes });
+          runs.push({ id: row.id, createdAt: row.createdAt, logBytes: row.logBytes, lastOutputBytes: row.lastOutputBytes, finishedAt: row.finishedAt });
         }
       }
     }
     runs.sort((a, b) => timeOf(b.createdAt) - timeOf(a.createdAt) || 0);
     let latest: PlanUsageReading | null = null;
     for (const run of runs.slice(0, RUN_LOOKBACK)) {
+      // A run that ended before the newest reading found so far cannot hold a newer one.
+      const finished = typeof run.finishedAt === "string" ? Date.parse(run.finishedAt) : NaN;
+      if (latest !== null && finished < timeOf(latest.at)) {
+        continue;
+      }
       const size = runSize(run);
       if (size <= 0) {
         continue;
@@ -99,25 +111,34 @@ export async function fetchRunPlanUsage(
       if (cached !== undefined && cached.size === size) {
         reading = cached.reading;
       } else {
+        // Bytes before `floor` were searched by an earlier call.
+        const floor = cached === undefined ? 0 : cached.size;
         // lastOutputBytes lags the log file by up to a minute of output, so read
         // past the end: the server returns only what exists.
-        const offset =
-          cached === undefined
-            ? Math.max(0, size - RUN_LOG_TAIL_BYTES)
-            : Math.max(cached.size, size - RUN_LOG_TAIL_BYTES);
-        const logRes = await doFetch(
-          `/api/heartbeat-runs/${encodeURIComponent(run.id)}/log?offset=${offset}&limitBytes=${RUN_LOG_READ_BYTES}`,
-          init,
-        );
-        if (!logRes.ok) {
+        let offset = Math.max(floor, size - RUN_LOG_TAIL_BYTES);
+        let limitBytes = RUN_LOG_READ_BYTES;
+        let found: PlanUsageReading | null = null;
+        let failed = false;
+        // Claude Code writes a rate_limit_event only when the numbers change, so
+        // the last one can sit far before the end: step back until one turns up.
+        for (let step = 0; ; step += 1) {
+          const content = await readLogSlice(doFetch, init, run.id, offset, limitBytes);
+          if (content === null) {
+            failed = true;
+            break;
+          }
+          found = latestRateLimitReading(content);
+          if (found !== null || offset <= floor || step === RUN_LOG_BACK_STEPS) {
+            break;
+          }
+          const start = Math.max(floor, offset - RUN_LOG_BACK_BYTES);
+          limitBytes = offset - start + RUN_LOG_OVERLAP_BYTES;
+          offset = start;
+        }
+        if (failed) {
           continue;
         }
-        const logBody = await readJson(logRes);
-        const content = isRecord(logBody) ? logBody.content : undefined;
-        if (typeof content !== "string") {
-          continue;
-        }
-        reading = latestRateLimitReading(content) ?? cached?.reading ?? null;
+        reading = found ?? cached?.reading ?? null;
         memo.set(run.id, { size, reading });
       }
       // Claude runs overlap: an older run can still be writing after a newer one
@@ -154,6 +175,26 @@ function timeOf(value: unknown): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** One slice of a run log: `limitBytes` bytes from `offset`, or null when Paperclip does not return one. */
+async function readLogSlice(
+  doFetch: typeof fetch,
+  init: RequestInit,
+  runId: string,
+  offset: number,
+  limitBytes: number,
+): Promise<string | null> {
+  const res = await doFetch(
+    `/api/heartbeat-runs/${encodeURIComponent(runId)}/log?offset=${offset}&limitBytes=${limitBytes}`,
+    init,
+  );
+  if (!res.ok) {
+    return null;
+  }
+  const body = await readJson(res);
+  const content = isRecord(body) ? body.content : undefined;
+  return typeof content === "string" ? content : null;
 }
 
 /** Reads a JSON body, returning `undefined` when it is not valid JSON. */

@@ -24,8 +24,10 @@ function json(status: number, body: unknown): Route {
 const AGENTS_URL = "/api/companies/co-1/agents";
 const runsUrl = (agentId: string) =>
   `/api/companies/co-1/heartbeat-runs?agentId=${agentId}&limit=3&summary=true`;
-const logUrl = (runId: string, offset: number) =>
-  `/api/heartbeat-runs/${runId}/log?offset=${offset}&limitBytes=524288`;
+const logUrl = (runId: string, offset: number, limitBytes = 524288) =>
+  `/api/heartbeat-runs/${runId}/log?offset=${offset}&limitBytes=${limitBytes}`;
+
+const logsOf = (calls: { url: string }[]) => calls.map((call) => call.url).filter((url) => url.startsWith("/api/heartbeat-runs/"));
 
 function eventLine(ts: string, fiveHour: number, sevenDay: number): string {
   const event = {
@@ -161,16 +163,17 @@ test("a grown log with no new event keeps the cached reading", async () => {
   assert.equal(reading.usage.session?.usedPercent, 13);
 });
 
-test("a running run reads from 256 KiB before lastOutputBytes", async () => {
+test("stepping back stops at the start of the log", async () => {
   const { impl, calls } = fakeFetch({
     [AGENTS_URL]: json(200, [claudeAgent]),
     [runsUrl("a-claude")]: json(200, [
       { id: "run-live", status: "running", createdAt: "2026-10-30T02:00:00.000Z", logBytes: null, lastOutputBytes: 300000 },
     ]),
     [logUrl("run-live", 37856)]: json(200, logBody("run-live", plainLine)),
+    [logUrl("run-live", 0, 103392)]: json(200, logBody("run-live", plainLine)),
   });
   assert.equal(await fetchRunPlanUsage("co-1", { fetchImpl: impl }), null);
-  assert.ok(calls.some((call) => call.url === logUrl("run-live", 37856)));
+  assert.deepEqual(logsOf(calls), [logUrl("run-live", 37856), logUrl("run-live", 0, 103392)]);
 });
 
 test("a run with no sizes is skipped without a log request", async () => {
@@ -252,4 +255,97 @@ test("an older run still writing beats a newer run that has ended", async () => 
   assert.ok(reading !== null);
   assert.equal(reading.at, "2026-10-30T03:08:00.000Z");
   assert.equal(reading.usage.session?.usedPercent, 45);
+});
+
+test("a tail with no event steps back and finds one", async () => {
+  const { impl, calls } = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-live", createdAt: "2026-10-30T03:50:00.000Z", finishedAt: null, logBytes: null, lastOutputBytes: 900000 },
+    ]),
+    [logUrl("run-live", 637856)]: json(200, logBody("run-live", plainLine)),
+    [logUrl("run-live", 113568, 589824)]: json(200, logBody("run-live", eventLine("2026-10-30T03:54:25.000Z", 0.19, 0.05))),
+  });
+  const reading = await fetchRunPlanUsage("co-1", { fetchImpl: impl });
+  assert.ok(reading !== null);
+  assert.equal(reading.usage.session?.usedPercent, 19);
+  assert.deepEqual(logsOf(calls), [logUrl("run-live", 637856), logUrl("run-live", 113568, 589824)]);
+});
+
+test("steps back at most RUN_LOG_BACK_STEPS times", async () => {
+  const memo: RunLogMemo = new Map();
+  const { impl, calls } = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-big", createdAt: "2026-10-30T02:00:00.000Z", logBytes: 5000000, lastOutputBytes: 5000000 },
+    ]),
+    [logUrl("run-big", 4737856)]: json(200, logBody("run-big", plainLine)),
+    [logUrl("run-big", 4213568, 589824)]: json(200, logBody("run-big", plainLine)),
+    [logUrl("run-big", 3689280, 589824)]: json(200, logBody("run-big", plainLine)),
+    [logUrl("run-big", 3164992, 589824)]: json(200, logBody("run-big", plainLine)),
+  });
+  assert.equal(await fetchRunPlanUsage("co-1", { fetchImpl: impl, memo }), null);
+  assert.equal(logsOf(calls).length, 4);
+  assert.deepEqual(memo.get("run-big"), { size: 5000000, reading: null });
+});
+
+test("a grown log steps back only to the remembered size", async () => {
+  const memo: RunLogMemo = new Map();
+  const first = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-live", createdAt: "2026-10-30T02:00:00.000Z", logBytes: null, lastOutputBytes: 100000 },
+    ]),
+    [logUrl("run-live", 0)]: json(200, logBody("run-live", eventLine("2026-10-30T02:10:00.000Z", 0.13, 0.04))),
+  });
+  await fetchRunPlanUsage("co-1", { fetchImpl: first.impl, memo });
+  const second = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-live", createdAt: "2026-10-30T02:00:00.000Z", logBytes: null, lastOutputBytes: 700000 },
+    ]),
+    [logUrl("run-live", 437856)]: json(200, logBody("run-live", plainLine)),
+    [logUrl("run-live", 100000, 403392)]: json(200, logBody("run-live", plainLine)),
+  });
+  const reading = await fetchRunPlanUsage("co-1", { fetchImpl: second.impl, memo });
+  assert.ok(reading !== null);
+  assert.equal(reading.usage.session?.usedPercent, 13);
+  assert.deepEqual(logsOf(second.calls), [logUrl("run-live", 437856), logUrl("run-live", 100000, 403392)]);
+  assert.equal(memo.get("run-live")?.size, 700000);
+});
+
+test("a run that ended before the latest reading is not read", async () => {
+  const { impl, calls } = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-new", createdAt: "2026-10-30T03:50:00.000Z", finishedAt: null, logBytes: 1000, lastOutputBytes: 1000 },
+      { id: "run-done", createdAt: "2026-10-30T03:13:00.000Z", finishedAt: "2026-10-30T03:20:00.000Z", logBytes: 1000, lastOutputBytes: 1000 },
+      { id: "run-long", createdAt: "2026-10-30T02:30:00.000Z", finishedAt: "2026-10-30T04:10:00.000Z", logBytes: 1000, lastOutputBytes: 1000 },
+    ]),
+    [logUrl("run-new", 0)]: json(200, logBody("run-new", eventLine("2026-10-30T03:54:00.000Z", 0.19, 0.05))),
+    [logUrl("run-long", 0)]: json(200, logBody("run-long", eventLine("2026-10-30T04:05:00.000Z", 0.2, 0.05))),
+  });
+  const reading = await fetchRunPlanUsage("co-1", { fetchImpl: impl });
+  assert.ok(reading !== null);
+  assert.equal(reading.at, "2026-10-30T04:05:00.000Z");
+  assert.deepEqual(logsOf(calls), [logUrl("run-new", 0), logUrl("run-long", 0)]);
+});
+
+test("a failed step back skips the run and leaves the memo", async () => {
+  const memo: RunLogMemo = new Map();
+  const { impl, calls } = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-new", createdAt: "2026-10-30T03:00:00.000Z", logBytes: 900000, lastOutputBytes: 900000 },
+      { id: "run-old", createdAt: "2026-10-30T02:00:00.000Z", logBytes: 1000, lastOutputBytes: 1000 },
+    ]),
+    [logUrl("run-new", 637856)]: json(200, logBody("run-new", plainLine)),
+    [logUrl("run-new", 113568, 589824)]: json(500, { error: "server error" }),
+    [logUrl("run-old", 0)]: json(200, logBody("run-old", eventLine("2026-10-30T02:10:00.000Z", 0.13, 0.04))),
+  });
+  const reading = await fetchRunPlanUsage("co-1", { fetchImpl: impl, memo });
+  assert.ok(reading !== null);
+  assert.equal(reading.usage.session?.usedPercent, 13);
+  assert.equal(memo.has("run-new"), false);
+  assert.equal(logsOf(calls).length, 3);
 });
