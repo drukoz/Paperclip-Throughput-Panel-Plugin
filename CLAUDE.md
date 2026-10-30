@@ -61,7 +61,7 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 
 - Node >= 24.11 (`engines` in `package.json`); 24.22.1 is installed.
 - `@paperclipai/plugin-sdk` 2026.1023.0. The host now runs 2026.1029.0-nightly.1, and the routes and response fields this plugin reads were rechecked there on 2026-10-30. Do not upgrade the SDK as a side effect of other work.
-- Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0; they are unchanged in 2026.1029.0-nightly.1.
+- Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0. The fields the plugin reads are unchanged in 2026.1029.0-nightly.1, which only adds a `github` provider and an optional `environmentId`.
 
 ## Branches and delivery
 
