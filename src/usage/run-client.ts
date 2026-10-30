@@ -87,7 +87,8 @@ export async function fetchRunPlanUsage(
         }
       }
     }
-    runs.sort((a, b) => runTime(b) - runTime(a) || 0);
+    runs.sort((a, b) => timeOf(b.createdAt) - timeOf(a.createdAt) || 0);
+    let latest: PlanUsageReading | null = null;
     for (const run of runs.slice(0, RUN_LOOKBACK)) {
       const size = runSize(run);
       if (size <= 0) {
@@ -119,11 +120,13 @@ export async function fetchRunPlanUsage(
         reading = latestRateLimitReading(content) ?? cached?.reading ?? null;
         memo.set(run.id, { size, reading });
       }
-      if (reading !== null) {
-        return reading;
+      // Claude runs overlap: an older run can still be writing after a newer one
+      // has ended, so keep the reading observed last, not the newest run's.
+      if (reading !== null && (latest === null || timeOf(reading.at) > timeOf(latest.at))) {
+        latest = reading;
       }
     }
-    return null;
+    return latest;
   } catch (err) {
     if (options.signal?.aborted) {
       throw err;
@@ -143,9 +146,9 @@ function runSize(run: RunRow): number {
   return 0;
 }
 
-/** The run's createdAt as an epoch time; rows that do not parse sort last. */
-function runTime(run: RunRow): number {
-  const time = typeof run.createdAt === "string" ? Date.parse(run.createdAt) : NaN;
+/** An ISO 8601 time as epoch ms; a value that does not parse counts as the earliest. */
+function timeOf(value: unknown): number {
+  const time = typeof value === "string" ? Date.parse(value) : NaN;
   return Number.isNaN(time) ? -Infinity : time;
 }
 

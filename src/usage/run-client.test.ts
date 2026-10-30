@@ -218,7 +218,7 @@ test("an aborted call rejects", async () => {
   await assert.rejects(fetchRunPlanUsage("co-1", { fetchImpl, signal: controller.signal }));
 });
 
-test("runs from two Claude agents are searched newest first", async () => {
+test("runs from two Claude agents are read newest first", async () => {
   const { impl, calls } = fakeFetch({
     [AGENTS_URL]: json(200, [claudeAgent, { id: "a-claude-2", adapterType: "claude_local", name: "CTO 2" }]),
     [runsUrl("a-claude")]: json(200, [
@@ -233,6 +233,23 @@ test("runs from two Claude agents are searched newest first", async () => {
   const reading = await fetchRunPlanUsage("co-1", { fetchImpl: impl });
   assert.ok(reading !== null);
   assert.equal(reading.usage.session?.usedPercent, 30);
-  assert.ok(calls.some((call) => call.url === logUrl("run-late", 0)));
-  assert.ok(!calls.some((call) => call.url === logUrl("run-early", 0)));
+  const late = calls.findIndex((call) => call.url === logUrl("run-late", 0));
+  const early = calls.findIndex((call) => call.url === logUrl("run-early", 0));
+  assert.ok(late !== -1 && late < early);
+});
+
+test("an older run still writing beats a newer run that has ended", async () => {
+  const { impl } = fakeFetch({
+    [AGENTS_URL]: json(200, [claudeAgent]),
+    [runsUrl("a-claude")]: json(200, [
+      { id: "run-short", status: "succeeded", createdAt: "2026-10-30T02:50:00.000Z", logBytes: 1000, lastOutputBytes: 1000 },
+      { id: "run-long", status: "running", createdAt: "2026-10-30T02:30:00.000Z", logBytes: null, lastOutputBytes: 1000 },
+    ]),
+    [logUrl("run-short", 0)]: json(200, logBody("run-short", eventLine("2026-10-30T03:01:00.000Z", 0.4, 0.1))),
+    [logUrl("run-long", 0)]: json(200, logBody("run-long", eventLine("2026-10-30T03:08:00.000Z", 0.45, 0.11))),
+  });
+  const reading = await fetchRunPlanUsage("co-1", { fetchImpl: impl });
+  assert.ok(reading !== null);
+  assert.equal(reading.at, "2026-10-30T03:08:00.000Z");
+  assert.equal(reading.usage.session?.usedPercent, 45);
 });
