@@ -22,7 +22,7 @@ The worker polls the metrics endpoint every 5 s by default (configurable via `po
 
 Polling happens worker-side because the browser cannot reach `127.0.0.1:18081` on the Paperclip host — the endpoint is bound to the host's loopback, so only a process running on that host can scrape it.
 
-The Claude plan section is fetched by the panel itself, not by the worker. The UI bundle runs inside the Paperclip page with your signed-in session, so it calls Paperclip's own API: `GET /api/companies/:companyId/ai-connections` to find your default Claude subscription connection, then `GET /api/companies/:companyId/ai-connections/:connectionId/usage?grantId=…`, which asks Anthropic for that account's usage. The plugin never sees a Claude credential. The panel checks when you expand it, then every 5 minutes while it stays expanded and the tab is visible (15 minutes after Anthropic rate-limits a check); the ↻ button checks right away. Each check reads the connection's stored credential, which Paperclip records in that secret's access log, so the cadence is minutes rather than seconds.
+The Claude plan section is read by the panel itself, not by the worker, with your signed-in Paperclip session; the plugin never sees a Claude credential. It has two sources. **Agent runs:** Claude Code writes the account's 5-hour and weekly utilization into every Claude agent run's log (a `rate_limit_event` line). While the card is expanded and the tab is visible, the panel reads the end of the newest Claude runs' logs every 60 seconds (`GET /api/companies/:companyId/agents`, `GET /api/companies/:companyId/heartbeat-runs?agentId=…`, `GET /api/heartbeat-runs/:runId/log`), reading only bytes it has not read before. This asks nothing of Anthropic. **Usage check:** `GET /api/companies/:companyId/ai-connections` finds your default Claude subscription connection, then `GET /api/companies/:companyId/ai-connections/:connectionId/usage?grantId=…` asks Anthropic for that account's usage. It is the only source of the Fable meter. It runs at most every 15 minutes (30 after Anthropic rate-limits it), and the schedule and the last good answer are kept in `localStorage`, so a reload or a second tab does not check again. Each usage check reads the connection's stored credential, which Paperclip records in that secret's access log. For each meter the panel shows the newer of the two readings; hover a bar to see how old it is and where it came from. ↻ re-reads the runs at once, and forces a usage check only when the last one is at least 5 minutes old.
 
 ## Build
 
@@ -176,7 +176,8 @@ paperclipai connect --persona board
   paperclipai plugin disable rukoz.throughput-panel
   paperclipai plugin enable rukoz.throughput-panel
   ```
-- **The Claude plan section says "No Claude subscription connected" or asks you to reconnect.** Open AI connections in Paperclip and connect or reconnect your Claude subscription. The section follows on its next check; ↻ checks right away.
+- **The Claude plan section says "No Claude subscription connected" or asks you to reconnect.** Open AI connections in Paperclip and connect or reconnect your Claude subscription. The section follows on its next usage check, at most 15 minutes later; ↻ checks at once if the last check is at least 5 minutes old.
+- **The Claude plan note says Anthropic is rate-limiting usage checks.** The 5h and weekly bars keep updating from agent runs; only the Fable bar waits for the next successful check, at most 30 minutes later. Nothing needs doing.
 - **The model server restarted and the panel stopped updating.** The worker recovers on its own: a failed poll is caught, `lastError` is set, and the next interval retries — the poll loop is never torn down by a failed scrape. A counter reset (which is what a vLLM restart looks like, because the cumulative counters drop) clears the sample window, so rates read `—` for one poll and refill within about 10 s (two poll cycles); this is the same behaviour noted in [Scope and limits](#scope-and-limits) below. If the plugin **worker process** was replaced (a host restart, or the worker being respawned), an already-open browser tab can keep showing the snapshot it last received — **reload the browser page** to re-establish the UI data bridge. Reloading the page is the first thing to try, and it is cheaper than a disable/enable cycle. Only if a page reload does not help is a disable/enable cycle warranted, and the logs (`paperclipai plugin logs rukoz.throughput-panel`) are the place to look.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
 - **Selecting 15m right after the worker starts shows a smaller average.** The worker averages over whatever history it has retained so far, so before 15 minutes have accumulated the readout covers that shorter span — the average's tooltip says how many seconds of history it has. The graph fills in over the following minutes as more samples arrive.
@@ -212,7 +213,13 @@ src/
     select.test.ts     Tests for the meter selection
     client.ts          Fetches the default Claude subscription's usage from Paperclip's API
     client.test.ts     Tests for the client, using a fake fetch
-    view.ts            Folds check results into the section's view state; poll delays
+    run-events.ts      Parses Claude Code's rate_limit_event lines out of a run-log slice
+    run-events.test.ts Tests for the run-log parser
+    run-client.ts      Reads the newest Claude agent runs' log tails through Paperclip's API
+    run-client.test.ts Tests for the run-log reader, using a fake fetch
+    stored.ts          The usage-check state kept in localStorage, and the check schedule
+    stored.test.ts     Tests for the stored state
+    view.ts            Merges agent-run and usage-check readings into the section's view state
     view.test.ts       Tests for the view state and delays
 ```
 
@@ -223,5 +230,5 @@ src/
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
 - The windowed average skips intervals with no tokens, so it is an average of active throughput, not of wall-clock time; a window in which nothing ran at all reads `0`. The instantaneous readout and the sparkline are not filtered this way.
 - Claude plan usage is shown only in the expanded card, not in the collapsed pill.
-- The Fable row reads the weekly window Anthropic reports for the Fable model. If the account's usage has no Fable window, the row shows `—`.
+- The Fable row comes only from Anthropic's usage check: it shows `—` until a check succeeds, or when the account has no Fable window. The 5h and weekly rows are as fresh as the newer of the last Claude call an agent made through Paperclip and the last successful usage check. A bar whose window has reset since its reading shows `—`.
 - With several Claude subscriptions connected, the section shows your default one, as set in Paperclip's AI connections.
