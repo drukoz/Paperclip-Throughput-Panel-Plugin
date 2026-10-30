@@ -8,6 +8,8 @@ import { AVERAGE_WINDOW_KEYS, AVERAGE_WINDOW_MS, isAverageWindowKey } from "../w
 import { Sparkline } from "./Sparkline.tsx";
 import { formatAge, formatCount, formatPct, formatRate } from "./format.ts";
 import { averageTitle, pointsInWindow, windowCaption } from "./window.ts";
+import { PlanUsageSection } from "./PlanUsageSection.tsx";
+import { usePlanUsage } from "./usePlanUsage.ts";
 
 const COLLAPSED_KEY = "rukoz.throughput-panel.collapsed";
 const WINDOW_KEY = "rukoz.throughput-panel.window";
@@ -248,6 +250,8 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
     data !== null &&
     (data.status === "ok" || data.status === "unreachable");
   const showCompact = collapsed || !hasRichData;
+  // Claude plan usage is checked only while the card is expanded (see usePlanUsage).
+  const planUsage = usePlanUsage(context.companyId, !showCompact);
 
   let compact: { color: string; title: string; text: string; message?: string };
   if (error !== null) {
@@ -373,6 +377,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                 <div style={{ color: MUTED, fontSize: 10, marginTop: 6 }}>
                   {data.modelName ?? "—"} · {formatAge(data.lastSampleAt)}
                 </div>
+                <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} />
               </>
             ) : (
               <>
@@ -390,6 +395,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                   last seen {formatAge(data.lastSampleAt)}
                 </div>
                 <StatGrid data={data} />
+                <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} />
               </>
             )}
           </div>
