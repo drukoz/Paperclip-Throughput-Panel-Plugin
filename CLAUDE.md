@@ -11,7 +11,7 @@ Its one user is the board operator who owns this Paperclip instance and watches 
 
 ## Where it runs
 
-- Paperclip runs on this Mac as the launchd service `ing.paperclip.paperclipai`. The service runs `~/.local/bin/paperclipai run --instance default`, a shim for the managed, pinned install at `~/.paperclip/cli/current` (version 2026.1023.0). A newer Homebrew global install (`/opt/homebrew/lib/node_modules/paperclipai`, 2026.1029.0-nightly.0) also exists, but the service does not run it.
+- Paperclip runs on this Mac as the launchd service `ing.paperclip.paperclipai`. The service runs `~/.local/bin/paperclipai run --instance default`, a shim for the managed install at `~/.paperclip/cli/current`. Since 2026-10-30 that is 2026.1029.0-nightly.1, moved there at the user's request (it was 2026.1023.0). The user's launchd job `com.drukoz.paperclip-local-patches` re-applies local patches to the installed Paperclip every 30 minutes and may restart it.
 - The plugin is installed from a local path: this repository's managed checkout, `~/.paperclip/instances/default/projects/f5895970-0d60-4783-9d98-ee75e99a924b/beea1c91-3d42-4a92-b871-27082af1144e/_default`. The host runs `dist/worker.js` in a worker process and serves `dist/ui/` to the browser at `/_plugins/rukoz.throughput-panel/ui/`.
 - The worker scrapes `http://127.0.0.1:18081/metrics`, a tunnel to hpcserver. The browser cannot reach that address, which is why the worker scrapes it.
 - The panel's UI code runs inside the Paperclip page with the user's board session. It can call Paperclip's HTTP API (`/api/...`) directly with `fetch(url, { credentials: "include" })`. The worker cannot: it has no board session.
@@ -60,8 +60,8 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 ## Pinned versions
 
 - Node >= 24.11 (`engines` in `package.json`); 24.22.1 is installed.
-- `@paperclipai/plugin-sdk` 2026.1023.0, matching the host version the service runs. Do not upgrade it as a side effect of other work.
-- Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0 (they are unchanged in 2026.1029.0-nightly.0).
+- `@paperclipai/plugin-sdk` 2026.1023.0. The host now runs 2026.1029.0-nightly.1, and the routes and response fields this plugin reads were rechecked there on 2026-10-30. Do not upgrade the SDK as a side effect of other work.
+- Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0; they are unchanged in 2026.1029.0-nightly.1.
 
 ## Branches and delivery
 
