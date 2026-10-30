@@ -1,11 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fetchPlanUsage } from "./client.ts";
-import { nextPlanUsageDelayMs, reducePlanUsageView } from "./view.ts";
-import type { AiConnectionList, AiConnectionSummary } from "./types.ts";
+import { fetchRunPlanUsage } from "./run-client.ts";
+import { applyCheckResult, isCheckDue, loadStoredPlanUsage, saveStoredPlanUsage } from "./stored.ts";
+import { RATE_LIMITED_NOTE, buildPlanUsageView } from "./view.ts";
+import type { AiConnectionList, AiConnectionSummary, PlanUsageResult } from "./types.ts";
 
-// Integration test for RUK-249: it drives Paperclip-shaped responses through the
-// client, the meter selection (via reducePlanUsageView) and the view reducer together.
+// Integration test for RUK-249: it drives Paperclip-shaped responses through
+// the run-log reader, the usage-check client, the stored state and the view
+// builder together.
+
+const NOW = Date.parse("2026-10-30T02:45:00.000Z");
 
 type Route = () => Response | Promise<Response>;
 
@@ -119,16 +124,71 @@ const USAGE_RATE_LIMITED = {
   message: "The provider rate limited the usage check. Try again later.",
 };
 
-test("full account: client, selection and reducer produce the three meters", async () => {
+// A real Claude Code rate_limit_event line, ids replaced: the 5h meter is 9 %
+// and the weekly meter 4 % (resetsAt 1793334000 = 2026-10-30T04:20:00.000Z,
+// 1793894400 = 2026-11-05T16:00:00.000Z), prefixed by a line of unrelated
+// stdout so the parser has something to skip.
+const RATE_LIMIT_EVENT = {
+  type: "rate_limit_event",
+  rate_limit_info: {
+    status: "allowed",
+    resetsAt: 1793334000,
+    rateLimitType: "five_hour",
+    overageStatus: "rejected",
+    overageDisabledReason: "out_of_credits",
+    isUsingOverage: false,
+    unifiedWindows: {
+      five_hour: { utilization: 0.09, resetsAt: 1793334000, status: "allowed" },
+      seven_day: { utilization: 0.04, resetsAt: 1793894400, status: "allowed" },
+    },
+  },
+  uuid: "uuid-1",
+  session_id: "session-1",
+};
+
+const RUN_LOG_CONTENT =
+  JSON.stringify({ ts: "2026-10-30T02:20:05.000Z", stream: "stdout", chunk: "Setting up the workspace\n", seq: 1 }) +
+  "\n" +
+  JSON.stringify({
+    ts: "2026-10-30T02:24:32.826Z",
+    attemptId: "attempt-1",
+    stream: "stdout",
+    chunk: JSON.stringify(RATE_LIMIT_EVENT) + "\n",
+    seq: 77,
+  }) +
+  "\n";
+
+// Run-log routes for company co-1: one Claude agent with one run whose log
+// holds the event above, and one non-Claude agent the reader must not query.
+function runLogRoutes(): Record<string, Route> {
+  const lastOutputBytes = Buffer.byteLength(RUN_LOG_CONTENT);
+  return {
+    "/api/companies/co-1/agents": json([
+      { id: "a-cto", adapterType: "claude_local" },
+      { id: "a-eng", adapterType: "opencode_local" },
+    ]),
+    "/api/companies/co-1/heartbeat-runs?agentId=a-cto&limit=3&summary=true": json([
+      { id: "run-1", createdAt: "2026-10-30T02:20:00.000Z", logBytes: null, lastOutputBytes },
+    ]),
+    "/api/heartbeat-runs/run-1/log?offset=0&limitBytes=524288": json({
+      runId: "run-1",
+      store: "local_file",
+      logRef: "x",
+      content: RUN_LOG_CONTENT,
+    }),
+  };
+}
+
+test("full account: client, selection and view produce the three meters", async () => {
   const { impl, calls } = fakeFetch({ [LIST_URL]: json(LIST), [USAGE_URL]: json(USAGE_FULL) });
   const result = await fetchPlanUsage("co-1", { fetchImpl: impl });
-  const view = reducePlanUsageView({ kind: "loading" }, result);
+  const view = buildPlanUsageView(null, applyCheckResult(null, result, NOW));
   assert.deepEqual(view, {
     kind: "ok",
     usage: {
-      session: { usedPercent: 23, resetsAt: "2026-10-29T21:00:00.000Z" },
-      weekly: { usedPercent: 41, resetsAt: "2026-11-03T16:00:00.000Z" },
-      fable: { usedPercent: 12, resetsAt: "2026-11-03T16:00:00.000Z" },
+      session: { usedPercent: 23, resetsAt: "2026-10-29T21:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
+      weekly: { usedPercent: 41, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
+      fable: { usedPercent: 12, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
     },
     accountLabel: "owner@example.com",
     checkedAt: "2026-10-29T16:46:02.543Z",
@@ -144,12 +204,12 @@ test("full account: client, selection and reducer produce the three meters", asy
 test("legacy account: session and weekly meters, no Fable row", async () => {
   const { impl } = fakeFetch({ [LIST_URL]: json(LIST), [USAGE_URL]: json(USAGE_LEGACY) });
   const result = await fetchPlanUsage("co-1", { fetchImpl: impl });
-  const view = reducePlanUsageView({ kind: "loading" }, result);
+  const view = buildPlanUsageView(null, applyCheckResult(null, result, NOW));
   assert.deepEqual(view, {
     kind: "ok",
     usage: {
-      session: { usedPercent: 64, resetsAt: "2026-10-29T21:00:00.000Z" },
-      weekly: { usedPercent: 88, resetsAt: "2026-11-03T16:00:00.000Z" },
+      session: { usedPercent: 64, resetsAt: "2026-10-29T21:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
+      weekly: { usedPercent: 88, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
       fable: null,
     },
     accountLabel: "owner@example.com",
@@ -158,27 +218,28 @@ test("legacy account: session and weekly meters, no Fable row", async () => {
   });
 });
 
-test("rate limit after a good check keeps the meters and marks the retry delay", async () => {
+test("rate limit after a good check keeps the meters and delays the next check 30 min", async () => {
   const good = fakeFetch({ [LIST_URL]: json(LIST), [USAGE_URL]: json(USAGE_FULL) });
   const first = await fetchPlanUsage("co-1", { fetchImpl: good.impl });
-  const okView = reducePlanUsageView({ kind: "loading" }, first);
+  const okState = applyCheckResult(null, first, NOW);
 
   const limited = fakeFetch({ [LIST_URL]: json(LIST), [USAGE_URL]: json(USAGE_RATE_LIMITED) });
   const second = await fetchPlanUsage("co-1", { fetchImpl: limited.impl });
-  const view = reducePlanUsageView(okView, second);
+  const state = applyCheckResult(okState, second, NOW + 1);
+  const view = buildPlanUsageView(null, state);
 
   assert.deepEqual(view, {
     kind: "ok",
     usage: {
-      session: { usedPercent: 23, resetsAt: "2026-10-29T21:00:00.000Z" },
-      weekly: { usedPercent: 41, resetsAt: "2026-11-03T16:00:00.000Z" },
-      fable: { usedPercent: 12, resetsAt: "2026-11-03T16:00:00.000Z" },
+      session: { usedPercent: 23, resetsAt: "2026-10-29T21:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
+      weekly: { usedPercent: 41, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
+      fable: { usedPercent: 12, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-29T16:46:02.543Z" },
     },
     accountLabel: "owner@example.com",
     checkedAt: "2026-10-29T16:46:02.543Z",
-    refreshError: "Rate limited by Anthropic, retrying in 15 min",
+    refreshError: RATE_LIMITED_NOTE,
   });
-  assert.equal(nextPlanUsageDelayMs(second), 900_000);
+  assert.equal(state.nextCheckAt, NOW + 1 + 1_800_000);
 });
 
 test("default needs attention: one call, the reconnect message is shown", async () => {
@@ -189,7 +250,7 @@ test("default needs attention: one call, the reconnect message is shown", async 
     "Reconnect with a separate sign-in to protect your existing terminal login.";
   const { impl, calls } = fakeFetch({ [LIST_URL]: json(list) });
   const result = await fetchPlanUsage("co-1", { fetchImpl: impl });
-  const view = reducePlanUsageView({ kind: "loading" }, result);
+  const view = buildPlanUsageView(null, applyCheckResult(null, result, NOW));
   assert.deepEqual(view, {
     kind: "needs_attention",
     accountLabel: "owner@example.com",
@@ -203,7 +264,75 @@ test("no Claude subscription: the section reports no connection", async () => {
   list.connections = [list.connections[0]!];
   const { impl, calls } = fakeFetch({ [LIST_URL]: json(list) });
   const result = await fetchPlanUsage("co-1", { fetchImpl: impl });
-  const view = reducePlanUsageView({ kind: "loading" }, result);
+  const view = buildPlanUsageView(null, applyCheckResult(null, result, NOW));
   assert.deepEqual(view, { kind: "no_connection" });
   assert.equal(calls.length, 1);
+});
+
+test("rate-limited check, agent run has numbers", async () => {
+  const { impl, calls } = fakeFetch({
+    ...runLogRoutes(),
+    [LIST_URL]: json(LIST),
+    [USAGE_URL]: json(USAGE_RATE_LIMITED),
+  });
+  const runs = await fetchRunPlanUsage("co-1", { fetchImpl: impl });
+  const result = await fetchPlanUsage("co-1", { fetchImpl: impl });
+  const view = buildPlanUsageView(runs, applyCheckResult(null, result, NOW));
+  assert.deepEqual(view, {
+    kind: "ok",
+    usage: {
+      session: { usedPercent: 9, resetsAt: "2026-10-30T04:20:00.000Z", source: "agent_run", at: "2026-10-30T02:24:32.826Z" },
+      weekly: { usedPercent: 4, resetsAt: "2026-11-05T16:00:00.000Z", source: "agent_run", at: "2026-10-30T02:24:32.826Z" },
+      fable: null,
+    },
+    accountLabel: "Claude",
+    checkedAt: "2026-10-30T02:24:32.826Z",
+    refreshError: RATE_LIMITED_NOTE,
+  });
+  assert.ok(!calls.some((call) => call.url.includes("agentId=a-eng")));
+});
+
+test("a newer good check wins per meter", async () => {
+  const { impl } = fakeFetch({
+    ...runLogRoutes(),
+    [LIST_URL]: json(LIST),
+    [USAGE_URL]: json({ ...USAGE_FULL, checkedAt: "2026-10-30T03:00:00.000Z" }),
+  });
+  const runs = await fetchRunPlanUsage("co-1", { fetchImpl: impl });
+  const result = await fetchPlanUsage("co-1", { fetchImpl: impl });
+  const view = buildPlanUsageView(runs, applyCheckResult(null, result, NOW));
+  assert.deepEqual(view, {
+    kind: "ok",
+    usage: {
+      session: { usedPercent: 23, resetsAt: "2026-10-29T21:00:00.000Z", source: "usage_check", at: "2026-10-30T03:00:00.000Z" },
+      weekly: { usedPercent: 41, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-30T03:00:00.000Z" },
+      fable: { usedPercent: 12, resetsAt: "2026-11-03T16:00:00.000Z", source: "usage_check", at: "2026-10-30T03:00:00.000Z" },
+    },
+    accountLabel: "owner@example.com",
+    checkedAt: "2026-10-30T03:00:00.000Z",
+    refreshError: null,
+  });
+});
+
+test("reload reuses the stored check", () => {
+  const map = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      map.set(key, value);
+    },
+  };
+  const okResult: PlanUsageResult = {
+    kind: "ok",
+    accountLabel: "owner@example.com",
+    checkedAt: "2026-10-29T16:46:02.543Z",
+    limits: USAGE_FULL.limits,
+  };
+  const stored = applyCheckResult(null, okResult, NOW);
+  saveStoredPlanUsage(storage, "co-1", stored);
+  const loaded = loadStoredPlanUsage(storage, "co-1");
+  assert.deepEqual(loaded, stored);
+  assert.equal(isCheckDue(loaded, NOW + 60_000), false);
+  assert.equal(isCheckDue(loaded, NOW + 900_000), true);
+  assert.deepEqual(buildPlanUsageView(null, loaded), buildPlanUsageView(null, stored));
 });

@@ -220,7 +220,7 @@ src/
     stored.ts          The usage-check state kept in localStorage, and the check schedule
     stored.test.ts     Tests for the stored state
     view.ts            Merges agent-run and usage-check readings into the section's view state
-    view.test.ts       Tests for the view state and delays
+    view.test.ts       Tests for merging readings and the view state
 ```
 
 ## Scope and limits
