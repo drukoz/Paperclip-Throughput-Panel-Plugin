@@ -5,7 +5,7 @@
 A Paperclip plugin, id `rukoz.throughput-panel`, that puts a small floating panel in the bottom-right corner of every signed-in Paperclip page. The panel shows:
 
 - the live tokens/sec of the company's local model server (vLLM serving `swift-1.5` on hpcserver), read by the plugin worker;
-- from RUK-249 on, the Claude plan usage of the signed-in user's default Claude subscription (5-hour session, weekly, weekly Fable), read by the panel itself from Paperclip's own API.
+- from RUK-249 on, the Claude plan usage of the signed-in user's default Claude subscription (5-hour session, weekly, weekly Fable), read by the panel itself from Paperclip's own API. The 5-hour and weekly numbers come from the `rate_limit_event` lines Claude Code writes into Claude agent run logs. Fable, plus a second reading of the other two, comes from Anthropic's usage check through Paperclip's AI-connection usage route.
 
 Its one user is the board operator who owns this Paperclip instance and watches the agents work. `README.md` is the user-facing manual (install, configure, verify, troubleshoot); this file is for agents working on the code.
 
@@ -27,7 +27,7 @@ src/windows.ts         the 1m / 5m / 15m average windows
 src/metrics/           Prometheus text parser and the rate window
 src/ui/index.tsx       the ThroughputPanel component (the whole panel)
 src/ui/format.ts       display formatters; src/ui/window.ts window helpers; src/ui/Sparkline.tsx
-src/usage/             Claude plan usage: contract, row selection, HTTP client (added by RUK-249)
+src/usage/             Claude plan usage (RUK-249): contract, meter selection, usage-check client, run-log parser and reader, stored check state, view
 scripts/build.mjs      esbuild bundling through the SDK's bundler presets
 ```
 
@@ -75,6 +75,7 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 - The `_default` checkout is the live plugin. `npm run build` there deletes and rewrites `dist/`, which the host serves to the user's browser. Only the CTO builds, commits or changes branches in `_default`, and only at delivery.
 - Never restart Paperclip or touch the launchd agents in `~/Library/LaunchAgents`: a restart kills every agent run in progress.
 - The worker process does not reload when `dist/worker.js` changes. Worker changes reach users only after a plugin disable/enable or a Paperclip restart, both of which the board operator does.
-- Every call to `GET /api/companies/:companyId/ai-connections/:connectionId/usage` reads the stored Claude credential, writes a row to Paperclip's secret access log, and asks Anthropic, which rate-limits. Poll it every few minutes at most, never every few seconds.
+- Every call to `GET /api/companies/:companyId/ai-connections/:connectionId/usage` reads the stored Claude credential, writes a row to Paperclip's secret access log, and asks Anthropic, which rate-limits it hard: on 2026-10-30 the panel's first checks all came back 429. The panel calls it at most every 15 minutes (30 after a 429), and shares that schedule across tabs through `localStorage`. Do not add another caller or shorten the interval; read numbers from agent run logs instead.
+- Run logs hold full agent transcripts. The panel reads only the last 256 KiB of the 3 newest Claude runs (`GET /api/heartbeat-runs/:runId/log?offset=…&limitBytes=…`) and keeps only the parsed `rate_limit_event` numbers. Never display, store or send other log content, and never read whole logs in a poll.
 - The `/api/plugins` routes need a board instance-admin credential; an agent key gets `403`. Do not loop on them.
 - Never commit a token, key or secret value, including in test fixtures.
