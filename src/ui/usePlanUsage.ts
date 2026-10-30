@@ -27,6 +27,8 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let controller: AbortController | null = null;
+    // Set when a check came due while the tab was hidden, so showing the tab runs it at once.
+    let skipped = false;
 
     const schedule = (ms: number) => {
       if (!cancelled) timer = setTimeout(() => void run(), ms);
@@ -35,9 +37,11 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
     async function run(): Promise<void> {
       timer = null;
       if (document.visibilityState === "hidden") {
+        skipped = true;
         schedule(PLAN_USAGE_POLL_MS);
         return;
       }
+      skipped = false;
       controller = new AbortController();
       lastCheckAt.current = Date.now();
       let result: PlanUsageResult;
@@ -51,11 +55,19 @@ export function usePlanUsage(companyId: string | null, enabled: boolean): PlanUs
       schedule(nextPlanUsageDelayMs(result));
     }
 
+    const onVisibilityChange = () => {
+      if (!skipped || document.visibilityState === "hidden") return;
+      if (timer !== null) clearTimeout(timer);
+      void run();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     const since = Date.now() - lastCheckAt.current;
     schedule(since >= PLAN_USAGE_MIN_GAP_MS ? 0 : PLAN_USAGE_MIN_GAP_MS - since);
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer !== null) clearTimeout(timer);
       controller?.abort();
     };
