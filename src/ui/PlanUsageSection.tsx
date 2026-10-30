@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactElement } from "react";
 import type { PlanUsageRow, PlanUsageView } from "../usage/types.ts";
-import { formatAge, formatPct, formatResetIn, usageColor } from "./format.ts";
+import { formatAge, formatPct, isWindowRestarted, meterDetails, usageColor } from "./format.ts";
 
 const MUTED = "rgba(250,250,250,0.55)";
 
@@ -36,9 +36,9 @@ function MeterRow({
   row: PlanUsageRow | null;
   now?: number;
 }) {
-  const details = row
-    ? `${label}: ${formatPct(row.usedPercent)} used, ${formatResetIn(row.resetsAt, now)}`
-    : `${label}: not reported for this account`;
+  const ref = now ?? Date.now();
+  const shown = row !== null && !isWindowRestarted(row.resetsAt, ref) ? row : null;
+  const details = meterDetails(label, row, ref);
   return (
     // Screen readers ignore aria-label on a role-less div; "img" makes them
     // read the full sentence, reset time included, instead of the bare cells.
@@ -58,19 +58,19 @@ function MeterRow({
           overflow: "hidden",
         }}
       >
-        {row ? (
+        {shown ? (
           <span
             style={{
               display: "block",
               height: "100%",
-              width: `${Math.min(100, Math.max(0, row.usedPercent))}%`,
-              background: usageColor(row.usedPercent),
+              width: `${Math.min(100, Math.max(0, shown.usedPercent))}%`,
+              background: usageColor(shown.usedPercent),
             }}
           />
         ) : null}
       </span>
       <span style={{ width: 34, textAlign: "right" }}>
-        {row ? formatPct(row.usedPercent) : "—"}
+        {shown ? formatPct(shown.usedPercent) : "—"}
       </span>
     </div>
   );
