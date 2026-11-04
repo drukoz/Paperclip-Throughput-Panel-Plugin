@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
@@ -25,6 +26,13 @@ const CLAUDE_ACCOUNT_SLOTS = [1, 2, 3] as const;
 const PROBE_TIMEOUT_MS = 60_000;
 /** Claude Code's HOME and config folder for the checks, away from the user's own ~/.claude. */
 const PROBE_CONFIG_DIR = join(tmpdir(), "rukoz-throughput-panel", "claude-check");
+/**
+ * Runs a function outside any host request. The SDK tags each host call with the
+ * request it was made in, and the host refuses a call whose request has ended. A
+ * Claude check outlives the "plan-probe" request that starts it, so it must not
+ * inherit that tag. Captured at module load, before any request exists.
+ */
+const runOutsideInvocation = AsyncLocalStorage.snapshot();
 
 interface Settings {
   metricsUrl: string;
@@ -38,6 +46,8 @@ let ctxRef: PluginContext | null = null;
 let settings: Settings | null = null;
 let probeSettings: ProbeSettings = resolveProbeSettings(null);
 let probeController: ProbeController | null = null;
+/** The company whose settings the worker received last; the host resolves a plugin's secret only with it. */
+let probeCompanyId: string | null = null;
 let window = new ThroughputWindow();
 let lastError: string | null = null;
 let started = false;
@@ -120,11 +130,12 @@ export function resolveProbeSettings(config: Record<string, unknown> | null): Pr
 }
 
 /** Resolve the auth token for one poll. The resolved value is used in memory only and never stored. */
-async function resolveToken(ctx: PluginContext, raw: unknown): Promise<string | null> {
+async function resolveToken(ctx: PluginContext, raw: unknown, companyId: string | null = null): Promise<string | null> {
   if (raw !== null && typeof raw === "object") {
     if ((raw as { type?: unknown }).type === "secret_ref") {
       try {
-        const token = await ctx.secrets.resolve(raw as never);
+        // The host resolves a plugin's secret only with the company its settings belong to.
+        const token = await ctx.secrets.resolve(raw as never, companyId !== null ? { companyId } : {});
         return token.length > 0 ? token : null;
       } catch {
         return null;
@@ -219,7 +230,7 @@ const plugin = definePlugin({
     probeSettings = resolveProbeSettings(config);
     const controller = createProbeController({
       now: () => Date.now(),
-      resolveToken: (raw) => resolveToken(ctx, raw),
+      resolveToken: (raw) => resolveToken(ctx, raw, probeCompanyId),
       run: (token) =>
         runProbe({
           claudePath: probeSettings.claudePath,
@@ -233,16 +244,17 @@ const plugin = definePlugin({
     probeController = controller;
     // Checks spend Claude usage, so only the expanded panel (active: true) starts them.
     ctx.data.register("plan-probe", async (params) => {
-      if (params.active === true) void controller.kick();
+      if (params.active === true) runOutsideInvocation(() => void controller.kick());
       return controller.snapshot();
     });
 
     startPolling(ctx);
   },
 
-  async onConfigChanged(newConfig) {
+  async onConfigChanged(newConfig, context) {
     if (ctxRef === null) return;
     try {
+      probeCompanyId = context?.companyId ?? probeCompanyId;
       const previous = settings;
       settings = resolveSettings(newConfig);
       if (
