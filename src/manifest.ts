@@ -50,10 +50,10 @@ const manifest: PaperclipPluginManifestV1 = {
         description: "Shown in the panel, for example the account's email address.",
       },
       claudeAccount1Token: {
-        type: "string",
+        format: "secret-ref",
         title: "Claude account 1: token",
         description:
-          "A Claude Code token for this account, from `claude setup-token`. Paste the token itself; it is kept in these settings as plain text. Used only to ask Claude Code for the account's usage.",
+          "A Claude Code token for this account, from `claude setup-token`. Press + to store it as a Paperclip secret; a raw value pasted instead stays in these settings as plain text. Used only to ask Claude Code for the account's usage.",
       },
       claudeAccount2Label: {
         type: "string",
@@ -61,10 +61,10 @@ const manifest: PaperclipPluginManifestV1 = {
         description: "Shown in the panel, for example the account's email address.",
       },
       claudeAccount2Token: {
-        type: "string",
+        format: "secret-ref",
         title: "Claude account 2: token",
         description:
-          "A Claude Code token for this account, from `claude setup-token`. Paste the token itself; it is kept in these settings as plain text. Used only to ask Claude Code for the account's usage.",
+          "A Claude Code token for this account, from `claude setup-token`. Press + to store it as a Paperclip secret; a raw value pasted instead stays in these settings as plain text. Used only to ask Claude Code for the account's usage.",
       },
       claudeAccount3Label: {
         type: "string",
@@ -72,10 +72,10 @@ const manifest: PaperclipPluginManifestV1 = {
         description: "Shown in the panel, for example the account's email address.",
       },
       claudeAccount3Token: {
-        type: "string",
+        format: "secret-ref",
         title: "Claude account 3: token",
         description:
-          "A Claude Code token for this account, from `claude setup-token`. Paste the token itself; it is kept in these settings as plain text. Used only to ask Claude Code for the account's usage.",
+          "A Claude Code token for this account, from `claude setup-token`. Press + to store it as a Paperclip secret; a raw value pasted instead stays in these settings as plain text. Used only to ask Claude Code for the account's usage.",
       },
       claudePath: {
         type: "string",

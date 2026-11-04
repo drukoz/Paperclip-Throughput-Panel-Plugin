@@ -90,7 +90,7 @@ Configuration is company-scoped. There are two ways to set it:
 | `modelName` | string | `swift-1.5` | Value of the `model_name` label to read. |
 | `pollIntervalMs` | number | `5000` | Poll interval in milliseconds; minimum 1000, clamped to 60000. |
 | `claudeAccount1Label` … `claudeAccount3Label` | string | *(none)* | Shown in the panel as "Claude · <label>"; blank means "Account <n>". |
-| `claudeAccount1Token` … `claudeAccount3Token` | string | *(none)* | A Claude Code token for that account, from `claude setup-token`. A slot without a token is ignored. Paste the token itself; secret references do not work for these fields yet. |
+| `claudeAccount1Token` … `claudeAccount3Token` | secret | *(none)* | A Claude Code token for that account, from `claude setup-token`, stored as a Paperclip secret. A slot without a token is ignored. A raw value pasted instead stays in these settings as plain text. |
 | `claudePath` | string | `/opt/homebrew/bin/claude` | Absolute path of the Claude Code CLI the checks run. |
 | `claudeCheckMinutes` | number | `15` | Minutes between checks of one account; 5 to 120. |
 
@@ -115,8 +115,8 @@ With at least one Claude account set, the expanded panel shows one **Claude · <
 To set up an account:
 
 1. In Terminal, run `claude setup-token` and sign in with that account in the browser window it opens. It prints a long-lived token.
-2. Paste the token into **Claude account N: token**. Paperclip keeps it in the plugin's settings as plain text, which only board users can read. Secret references do not work for these fields yet: this Paperclip resolves a plugin's secret only with the company it belongs to, which the worker does not pass.
-3. Set **Claude account N: label**, for example the account's email address.
+2. In **Claude account N: token**, press **+** next to the secret list. In **Create new secret**, give the secret a name (for example `claude-token-1`), paste the token as its value, and press **Create & bind**. Paperclip stores it encrypted, and the worker reads it for each check. **Or paste a raw value** also works, but keeps the token in the plugin's settings as plain text.
+3. Set **Claude account N: label**, for example the account's email address, and save the settings.
 4. A build that changes the worker reaches it only after you disable and re-enable the plugin once (`paperclipai plugin disable rukoz.throughput-panel`, then `paperclipai plugin enable rukoz.throughput-panel`). A page reload alone loads only the panel.
 
 What the bars can show: Anthropic reports only the window closest to its limit. Since 31 October 2026 that has usually been the weekly window, so the 5-hour bar shows "—" with the note "Anthropic reports only the weekly limit right now". Fable's weekly window is not reported for these tokens, so its row is hidden. Hover a bar for its reset time and age.
