@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import plugin, { resolveProbeSettings } from "./worker.ts";
 
@@ -42,6 +43,7 @@ function makeFetchStub(
 /** Minimal mock of the worker-side PluginContext: just config, secrets, logger and data. */
 function makeCtx(options: {
   config?: Record<string, unknown> | null;
+  resolveSecret?: (ref: unknown, options: unknown) => Promise<string>;
 }) {
   const handlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const ctx = {
@@ -52,7 +54,7 @@ function makeCtx(options: {
       fetch: () =>
         Promise.reject(new Error("ctx.http.fetch must not be used by the worker")),
     },
-    secrets: { resolve: async () => "resolved-secret" },
+    secrets: { resolve: options.resolveSecret ?? (async () => "resolved-secret") },
     logger: { info() {}, warn() {}, error() {} },
     data: {
       register(key: string, handler: (params: Record<string, unknown>) => Promise<unknown>) {
@@ -338,4 +340,89 @@ test("onValidateConfig rejects a relative claudePath, an out-of-range interval a
     claudeAccount2Token: { type: "secret_ref", secretId: "s" },
   });
   assert.deepEqual(good, { ok: true });
+});
+
+const REF_A = { type: "secret_ref", secretId: "11111111-2222-4333-8444-555555555555", version: "latest" };
+
+async function waitForProbeRead(
+  probe: (params: Record<string, unknown>) => Promise<unknown>,
+  accountCount: number,
+): Promise<ProbeSnapshot> {
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    const snap = (await probe({})) as ProbeSnapshot;
+    if (
+      snap.accounts.length === accountCount &&
+      snap.accounts.every((a) => a.lastAttemptAt !== null && a.probing === false)
+    ) {
+      return snap;
+    }
+    if (Date.now() > deadline) throw new Error("timed out waiting for the check to finish");
+    await sleep(25);
+  }
+}
+
+test("a secret token is resolved with the company id from onConfigChanged", async () => {
+  const resolves: { ref: unknown; options: unknown }[] = [];
+  const { ctx, handler } = makeCtx({
+    config: { metricsUrl: "http://probe.local/metrics" },
+    resolveSecret: async (ref, options) => {
+      resolves.push({ ref, options });
+      return "tok-from-secret";
+    },
+  });
+  const config = {
+    metricsUrl: "http://probe.local/metrics",
+    claudeAccount1Label: "A",
+    claudeAccount1Token: REF_A,
+    claudePath: "/nonexistent/claude-ruk518",
+  };
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(() => new Response("", { status: 503 }), calls);
+  try {
+    await plugin.definition.setup(ctx);
+    await plugin.definition.onConfigChanged!(config, { companyId: "company-1" });
+    const probe = handler("plan-probe")!;
+    await probe({ active: true });
+    const snap = await waitForProbeRead(probe, 1);
+    assert.deepEqual(resolves, [{ ref: REF_A, options: { companyId: "company-1" } }]);
+    assert.match(snap.accounts[0]!.error ?? "", /^Could not start Claude Code: .*ENOENT/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("a check started inside a request runs outside it", async () => {
+  const request = new AsyncLocalStorage<string>();
+  const stores: (string | undefined)[] = [];
+  const { ctx, handler } = makeCtx({
+    config: { metricsUrl: "http://probe.local/metrics" },
+    resolveSecret: async () => {
+      stores.push(request.getStore());
+      return "tok-from-secret";
+    },
+  });
+  const config = {
+    metricsUrl: "http://probe.local/metrics",
+    claudeAccount1Label: "A",
+    claudeAccount1Token: REF_A,
+    claudeAccount2Label: "B",
+    claudeAccount2Token: { type: "secret_ref", secretId: "66666666-7777-4888-8999-000000000000", version: "latest" },
+    claudePath: "/nonexistent/claude-ruk518",
+  };
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(() => new Response("", { status: 503 }), calls);
+  try {
+    await plugin.definition.setup(ctx);
+    await plugin.definition.onConfigChanged!(config, { companyId: "company-1" });
+    await request.run("inv-1", () => handler("plan-probe")!({ active: true }));
+    await waitForProbeRead(handler("plan-probe")!, 2);
+    assert.deepEqual(stores, [undefined, undefined]);
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
 });

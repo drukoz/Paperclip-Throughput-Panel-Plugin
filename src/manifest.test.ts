@@ -30,11 +30,14 @@ test("manifest declares the poll interval bounds the worker enforces", () => {
 
 test("manifest declares the Claude check settings", () => {
   const properties = manifest.instanceConfigSchema?.properties as
-    | Record<string, { type?: string; default?: number | string; minimum?: number; maximum?: number }>
+    | Record<string, { type?: string; format?: string; default?: number | string; minimum?: number; maximum?: number }>
     | undefined;
   for (const n of [1, 2, 3]) {
     assert.equal(properties?.[`claudeAccount${n}Label`]?.type, "string");
-    assert.equal(properties?.[`claudeAccount${n}Token`]?.type, "string");
+    // A secret field: the settings page shows its picker only for this format, and the
+    // host's Ajv check would reject the stored { type: "secret_ref" } object under type "string".
+    assert.equal(properties?.[`claudeAccount${n}Token`]?.format, "secret-ref");
+    assert.equal(properties?.[`claudeAccount${n}Token`]?.type, undefined);
   }
   assert.equal(properties?.claudePath?.default, "/opt/homebrew/bin/claude");
   assert.equal(properties?.claudeCheckMinutes?.default, 15);
