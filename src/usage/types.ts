@@ -70,6 +70,10 @@ export interface PlanUsageRow {
   usedPercent: number;
   /** ISO 8601 reset time, or null when Anthropic gave none. */
   resetsAt: string | null;
+  /** Set on merged meters: which source the row came from. */
+  source?: PlanUsageSource;
+  /** Set on merged meters: ISO 8601 time the row was observed. */
+  at?: string;
 }
 
 /** The three meters the panel shows. A meter is null when Anthropic did not report it. */
@@ -103,3 +107,31 @@ export type PlanUsageView =
   | { kind: "no_connection" }
   | { kind: "needs_attention"; accountLabel: string; message: string }
   | { kind: "error"; message: string };
+
+/** Where a meter's numbers came from: an agent run's log, Anthropic's usage check, or the worker's Claude check. */
+export type PlanUsageSource = "agent_run" | "usage_check" | "probe";
+
+/** The three meters as one source reported them at one moment. */
+export interface PlanUsageReading {
+  source: PlanUsageSource;
+  /** ISO 8601 time the numbers were observed. */
+  at: string;
+  usage: PlanUsage;
+}
+
+/**
+ * The usage-check state the panel keeps in localStorage per company, so page
+ * reloads and other tabs reuse the last check instead of asking Anthropic again.
+ */
+export interface StoredPlanUsage {
+  /** Epoch ms of the last usage check attempt. */
+  lastAttemptAt: number;
+  /** Epoch ms before which no automatic usage check runs. */
+  nextCheckAt: number;
+  /** The last successful usage check, or null when none has succeeded. */
+  good: PlanUsageReading | null;
+  /** Account label from the last result that named one, or null. */
+  accountLabel: string | null;
+  /** The last attempt's result, or null before the first attempt. */
+  last: PlanUsageResult | null;
+}

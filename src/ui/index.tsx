@@ -10,6 +10,8 @@ import { formatAge, formatCount, formatPct, formatRate } from "./format.ts";
 import { averageTitle, pointsInWindow, windowCaption } from "./window.ts";
 import { PlanUsageSection } from "./PlanUsageSection.tsx";
 import { usePlanUsage } from "./usePlanUsage.ts";
+import { useProbeUsage } from "./useProbeUsage.ts";
+import { probeAccountView } from "../usage/probe-view.ts";
 
 const COLLAPSED_KEY = "rukoz.throughput-panel.collapsed";
 const WINDOW_KEY = "rukoz.throughput-panel.window";
@@ -250,8 +252,30 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
     data !== null &&
     (data.status === "ok" || data.status === "unreachable");
   const showCompact = collapsed || !hasRichData;
-  // Claude plan usage is checked only while the card is expanded (see usePlanUsage).
-  const planUsage = usePlanUsage(context.companyId, !showCompact);
+  // Claude usage is checked only while the card is expanded. With Claude accounts in the
+  // plugin settings the worker checks each one (useProbeUsage, RUK-518); otherwise, or while
+  // an older worker without that handler runs, the default subscription (usePlanUsage, RUK-249).
+  const probe = useProbeUsage(!showCompact);
+  const probeAccounts = probe.snapshot?.accounts ?? [];
+  const useDefaultSubscription = probe.failed || (probe.snapshot !== null && probeAccounts.length === 0);
+  const planUsage = usePlanUsage(context.companyId, !showCompact && useDefaultSubscription);
+  const claudeSections =
+    probeAccounts.length > 0 ? (
+      probeAccounts.map((account, index) => {
+        const view = probeAccountView(account);
+        return (
+          <PlanUsageSection
+            key={`${index}:${account.label}`}
+            heading={`Claude · ${account.label}`}
+            view={view}
+            onRefresh={probe.refresh}
+            showFable={view.kind === "ok" && view.usage.fable !== null}
+          />
+        );
+      })
+    ) : (
+      <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} />
+    );
 
   let compact: { color: string; title: string; text: string; message?: string };
   if (error !== null) {
@@ -377,7 +401,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                 <div style={{ color: MUTED, fontSize: 10, marginTop: 6 }}>
                   {data.modelName ?? "—"} · {formatAge(data.lastSampleAt)}
                 </div>
-                <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} />
+                {claudeSections}
               </>
             ) : (
               <>
@@ -395,7 +419,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                   last seen {formatAge(data.lastSampleAt)}
                 </div>
                 <StatGrid data={data} />
-                <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} />
+                {claudeSections}
               </>
             )}
           </div>

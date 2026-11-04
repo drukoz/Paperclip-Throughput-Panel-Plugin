@@ -1,3 +1,5 @@
+import type { PlanUsageRow, PlanUsageSource } from "../usage/types.ts";
+
 /** Placeholder for every missing value (em dash, U+2014). */
 const DASH = "—";
 
@@ -67,4 +69,33 @@ export function usageColor(usedPercent: number): string {
   if (usedPercent >= 90) return "#ef4444";
   if (usedPercent >= 75) return "#f59e0b";
   return "#22c55e";
+}
+
+/** "agent_run" -> "from an agent run", "usage_check" -> "from Anthropic's usage check", "probe" -> "from a Claude Code check", undefined -> "". */
+export function formatSource(source: PlanUsageSource | undefined): string {
+  if (source === "agent_run") return "from an agent run";
+  if (source === "usage_check") return "from Anthropic's usage check";
+  if (source === "probe") return "from a Claude Code check";
+  return "";
+}
+
+/** True when `resetsAt` parses and is at or before `now` (epoch ms): the window restarted after the reading. */
+export function isWindowRestarted(resetsAt: string | null, now: number): boolean {
+  if (resetsAt === null) return false;
+  const parsed = Date.parse(resetsAt);
+  if (!Number.isFinite(parsed)) return false;
+  return parsed <= now;
+}
+
+/** The tooltip and screen-reader sentence for one meter at `now` (epoch ms). */
+export function meterDetails(label: string, row: PlanUsageRow | null, now: number): string {
+  if (row === null) return `${label}: no reading yet`;
+  if (isWindowRestarted(row.resetsAt, now)) {
+    return `${label}: window restarted ${formatAge(row.resetsAt, now)}; no reading since`;
+  }
+  const base = `${label}: ${formatPct(row.usedPercent)} used, ${formatResetIn(row.resetsAt, now)}`;
+  if (row.at !== undefined) {
+    return `${base}, as of ${formatAge(row.at, now)} ${formatSource(row.source)}`;
+  }
+  return base;
 }

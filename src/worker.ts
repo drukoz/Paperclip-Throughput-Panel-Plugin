@@ -1,15 +1,30 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { parsePrometheusText, selectSample } from "./metrics/parse.ts";
 import { ThroughputWindow } from "./metrics/rates.ts";
 import { buildSnapshot } from "./snapshot.ts";
 import type { ThroughputSnapshot } from "./types.ts";
+import { createProbeController } from "./usage/probe-controller.ts";
+import type { ProbeAccountSetting, ProbeController } from "./usage/probe-controller.ts";
+import { parseProbeOutput } from "./usage/probe-parse.ts";
+import { runProbe } from "./usage/probe-run.ts";
 
 const DEFAULT_METRICS_URL = "http://127.0.0.1:18081/metrics";
 const DEFAULT_MODEL_NAME = "swift-1.5";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
 const MAX_POLL_INTERVAL_MS = 60_000;
+const DEFAULT_CLAUDE_PATH = "/opt/homebrew/bin/claude";
+const DEFAULT_CHECK_MINUTES = 15;
+const MIN_CHECK_MINUTES = 5;
+const MAX_CHECK_MINUTES = 120;
+const CLAUDE_ACCOUNT_SLOTS = [1, 2, 3] as const;
+/** A Claude check that has not finished by then is killed. */
+const PROBE_TIMEOUT_MS = 60_000;
+/** Claude Code's HOME and config folder for the checks, away from the user's own ~/.claude. */
+const PROBE_CONFIG_DIR = join(tmpdir(), "rukoz-throughput-panel", "claude-check");
 
 interface Settings {
   metricsUrl: string;
@@ -21,6 +36,8 @@ interface Settings {
 
 let ctxRef: PluginContext | null = null;
 let settings: Settings | null = null;
+let probeSettings: ProbeSettings = resolveProbeSettings(null);
+let probeController: ProbeController | null = null;
 let window = new ThroughputWindow();
 let lastError: string | null = null;
 let started = false;
@@ -58,6 +75,47 @@ function resolveSettings(config: Record<string, unknown> | null): Settings {
         ? rawInterval
         : DEFAULT_POLL_INTERVAL_MS,
     ),
+  };
+}
+
+/** The Claude check settings: the configured accounts, the CLI path and the interval. */
+export interface ProbeSettings {
+  accounts: ProbeAccountSetting[];
+  claudePath: string;
+  intervalMinutes: number;
+}
+
+function isSecretRef(value: unknown): boolean {
+  return typeof value === "object" && value !== null && (value as { type?: unknown }).type === "secret_ref";
+}
+
+/**
+ * The Claude check settings from the plugin config: one account for each slot
+ * whose token is a non-empty string (trimmed) or a secret_ref object, labelled
+ * "Account <n>" when its label is blank; the CLI path; the interval in minutes,
+ * rounded and clamped to 5-120.
+ */
+export function resolveProbeSettings(config: Record<string, unknown> | null): ProbeSettings {
+  const accounts: ProbeAccountSetting[] = [];
+  for (const slot of CLAUDE_ACCOUNT_SLOTS) {
+    const rawToken = config?.[`claudeAccount${slot}Token`];
+    let token: unknown = null;
+    if (typeof rawToken === "string" && rawToken.trim() !== "") token = rawToken.trim();
+    else if (isSecretRef(rawToken)) token = rawToken;
+    if (token === null) continue;
+    const rawLabel = config?.[`claudeAccount${slot}Label`];
+    const label = typeof rawLabel === "string" && rawLabel.trim() !== "" ? rawLabel.trim() : `Account ${slot}`;
+    accounts.push({ label, token });
+  }
+  const rawMinutes = config?.claudeCheckMinutes;
+  const intervalMinutes =
+    typeof rawMinutes === "number" && Number.isFinite(rawMinutes)
+      ? Math.min(MAX_CHECK_MINUTES, Math.max(MIN_CHECK_MINUTES, Math.round(rawMinutes)))
+      : DEFAULT_CHECK_MINUTES;
+  return {
+    accounts,
+    claudePath: firstString(config?.claudePath) ?? DEFAULT_CLAUDE_PATH,
+    intervalMinutes,
   };
 }
 
@@ -158,6 +216,27 @@ const plugin = definePlugin({
       buildSnapshot({ window, lastError, started, modelName }),
     );
 
+    probeSettings = resolveProbeSettings(config);
+    const controller = createProbeController({
+      now: () => Date.now(),
+      resolveToken: (raw) => resolveToken(ctx, raw),
+      run: (token) =>
+        runProbe({
+          claudePath: probeSettings.claudePath,
+          token,
+          configDir: PROBE_CONFIG_DIR,
+          timeoutMs: PROBE_TIMEOUT_MS,
+        }),
+      parse: parseProbeOutput,
+    });
+    controller.configure(probeSettings.accounts, probeSettings.intervalMinutes);
+    probeController = controller;
+    // Checks spend Claude usage, so only the expanded panel (active: true) starts them.
+    ctx.data.register("plan-probe", async (params) => {
+      if (params.active === true) void controller.kick();
+      return controller.snapshot();
+    });
+
     startPolling(ctx);
   },
 
@@ -178,6 +257,8 @@ const plugin = definePlugin({
         started = false;
       }
       startPolling(ctxRef);
+      probeSettings = resolveProbeSettings(newConfig);
+      probeController?.configure(probeSettings.accounts, probeSettings.intervalMinutes);
       ctxRef.logger.info("throughput panel config reloaded", {
         metricsUrl: settings.metricsUrl,
         modelName: settings.modelName,
@@ -202,6 +283,7 @@ const plugin = definePlugin({
       metricsUrl: settings?.metricsUrl ?? null,
       modelName,
       sampleCount: window.size(),
+      claudeAccounts: probeSettings.accounts.length,
     };
     if (!started) {
       return { status: "ok", message: "starting", details };
@@ -236,6 +318,29 @@ const plugin = definePlugin({
         interval > MAX_POLL_INTERVAL_MS)
     ) {
       errors.push(`pollIntervalMs must be a number between ${MIN_POLL_INTERVAL_MS} and ${MAX_POLL_INTERVAL_MS}`);
+    }
+
+    const claudePath = config.claudePath;
+    if (claudePath !== undefined && (typeof claudePath !== "string" || !claudePath.startsWith("/"))) {
+      errors.push("claudePath must be an absolute path");
+    }
+
+    const minutes = config.claudeCheckMinutes;
+    if (
+      minutes !== undefined &&
+      (typeof minutes !== "number" ||
+        !Number.isFinite(minutes) ||
+        minutes < MIN_CHECK_MINUTES ||
+        minutes > MAX_CHECK_MINUTES)
+    ) {
+      errors.push(`claudeCheckMinutes must be a number between ${MIN_CHECK_MINUTES} and ${MAX_CHECK_MINUTES}`);
+    }
+
+    for (const slot of CLAUDE_ACCOUNT_SLOTS) {
+      const token = config[`claudeAccount${slot}Token`];
+      if (token !== undefined && token !== null && typeof token !== "string" && !isSecretRef(token)) {
+        errors.push(`claudeAccount${slot}Token must be a token string or a secret reference`);
+      }
     }
 
     return errors.length > 0 ? { ok: false, errors } : { ok: true };

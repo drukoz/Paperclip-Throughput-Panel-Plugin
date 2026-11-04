@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactElement } from "react";
 import type { PlanUsageRow, PlanUsageView } from "../usage/types.ts";
-import { formatAge, formatPct, formatResetIn, usageColor } from "./format.ts";
+import { formatAge, formatPct, isWindowRestarted, meterDetails, usageColor } from "./format.ts";
 
 const MUTED = "rgba(250,250,250,0.55)";
 
@@ -36,9 +36,9 @@ function MeterRow({
   row: PlanUsageRow | null;
   now?: number;
 }) {
-  const details = row
-    ? `${label}: ${formatPct(row.usedPercent)} used, ${formatResetIn(row.resetsAt, now)}`
-    : `${label}: not reported for this account`;
+  const ref = now ?? Date.now();
+  const shown = row !== null && !isWindowRestarted(row.resetsAt, ref) ? row : null;
+  const details = meterDetails(label, row, ref);
   return (
     // Screen readers ignore aria-label on a role-less div; "img" makes them
     // read the full sentence, reset time included, instead of the bare cells.
@@ -58,19 +58,19 @@ function MeterRow({
           overflow: "hidden",
         }}
       >
-        {row ? (
+        {shown ? (
           <span
             style={{
               display: "block",
               height: "100%",
-              width: `${Math.min(100, Math.max(0, row.usedPercent))}%`,
-              background: usageColor(row.usedPercent),
+              width: `${Math.min(100, Math.max(0, shown.usedPercent))}%`,
+              background: usageColor(shown.usedPercent),
             }}
           />
         ) : null}
       </span>
       <span style={{ width: 34, textAlign: "right" }}>
-        {row ? formatPct(row.usedPercent) : "—"}
+        {shown ? formatPct(shown.usedPercent) : "—"}
       </span>
     </div>
   );
@@ -79,13 +79,18 @@ function MeterRow({
 /**
  * The panel's "Claude plan" section: the 5-hour session, weekly and Fable
  * weekly meters, or the reason they are missing. Presentational only.
+ * `heading` replaces the "Claude plan" title (one section per checked account);
+ * `showFable: false` hides the Fable row.
  */
 export function PlanUsageSection(props: {
   view: PlanUsageView;
   onRefresh?: () => void;
   now?: number;
+  heading?: string;
+  showFable?: boolean;
 }): ReactElement {
   const { view, onRefresh, now } = props;
+  const heading = props.heading ?? "Claude plan";
   const accountLabel =
     view.kind === "ok" || view.kind === "needs_attention"
       ? view.accountLabel
@@ -93,7 +98,7 @@ export function PlanUsageSection(props: {
   return (
     <div
       role="group"
-      aria-label="Claude plan usage"
+      aria-label={`${heading} usage`}
       style={{
         marginTop: 8,
         paddingTop: 6,
@@ -102,7 +107,7 @@ export function PlanUsageSection(props: {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontWeight: 600, flex: 1 }} title={accountLabel}>
-          Claude plan
+          {heading}
         </span>
         {view.kind === "loading" ? (
           <span style={{ color: MUTED }}>checking…</span>
@@ -125,7 +130,9 @@ export function PlanUsageSection(props: {
         <>
           <MeterRow label="5h session" row={view.usage.session} now={now} />
           <MeterRow label="Weekly" row={view.usage.weekly} now={now} />
-          <MeterRow label="Fable weekly" row={view.usage.fable} now={now} />
+          {props.showFable !== false ? (
+            <MeterRow label="Fable weekly" row={view.usage.fable} now={now} />
+          ) : null}
           {view.refreshError !== null ? (
             <div style={errMsg}>{view.refreshError}</div>
           ) : null}
