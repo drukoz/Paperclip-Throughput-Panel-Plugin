@@ -97,6 +97,7 @@ test("usageColor thresholds are green below 75, amber to 90, red at 90", () => {
   test("formatSource names each source and renders empty for undefined", () => {
     assert.equal(formatSource("agent_run"), "from an agent run");
     assert.equal(formatSource("usage_check"), "from Anthropic's usage check");
+    assert.equal(formatSource("probe"), "from a Claude Code check");
     assert.equal(formatSource(undefined), "");
   });
 

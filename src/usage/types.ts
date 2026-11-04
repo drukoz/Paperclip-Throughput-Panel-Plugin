@@ -108,8 +108,8 @@ export type PlanUsageView =
   | { kind: "needs_attention"; accountLabel: string; message: string }
   | { kind: "error"; message: string };
 
-/** Where a meter's numbers came from: an agent run's log or Anthropic's usage check. */
-export type PlanUsageSource = "agent_run" | "usage_check";
+/** Where a meter's numbers came from: an agent run's log, Anthropic's usage check, or the worker's Claude check. */
+export type PlanUsageSource = "agent_run" | "usage_check" | "probe";
 
 /** The three meters as one source reported them at one moment. */
 export interface PlanUsageReading {

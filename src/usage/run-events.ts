@@ -1,4 +1,4 @@
-import type { PlanUsageReading, PlanUsageRow } from "./types.ts";
+import type { PlanUsageReading, PlanUsageRow, PlanUsageSource } from "./types.ts";
 
 /** Turns one Claude Code window ({ utilization: 0-1, resetsAt: epoch seconds }) into a meter row; null when utilization is missing. */
 export function windowRow(value: unknown): PlanUsageRow | null {
@@ -16,10 +16,11 @@ export function windowRow(value: unknown): PlanUsageRow | null {
   return { usedPercent: Math.round(utilization * 10000) / 100, resetsAt };
 }
 
-/** Builds an "agent_run" reading observed at `at` from Claude Code's unifiedWindows; null when no window is usable. */
+/** Builds a reading (source `source`, default "agent_run") observed at `at` from Claude Code's unifiedWindows; null when no window is usable. */
 export function readingFromWindows(
   windows: Record<string, unknown>,
   at: string,
+  source: PlanUsageSource = "agent_run",
 ): PlanUsageReading | null {
   const session = windowRow(windows["five_hour"]);
   const weekly = windowRow(windows["seven_day"]);
@@ -33,7 +34,7 @@ export function readingFromWindows(
   if (session === null && weekly === null && fable === null) {
     return null;
   }
-  return { source: "agent_run", at, usage: { session, weekly, fable } };
+  return { source, at, usage: { session, weekly, fable } };
 }
 
 /** The last Claude Code rate_limit_event in a slice of a Paperclip run log, as a reading; null when there is none. */

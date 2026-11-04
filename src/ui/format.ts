@@ -71,10 +71,11 @@ export function usageColor(usedPercent: number): string {
   return "#22c55e";
 }
 
-/** "agent_run" -> "from an agent run", "usage_check" -> "from Anthropic's usage check", undefined -> "". */
+/** "agent_run" -> "from an agent run", "usage_check" -> "from Anthropic's usage check", "probe" -> "from a Claude Code check", undefined -> "". */
 export function formatSource(source: PlanUsageSource | undefined): string {
   if (source === "agent_run") return "from an agent run";
   if (source === "usage_check") return "from Anthropic's usage check";
+  if (source === "probe") return "from a Claude Code check";
   return "";
 }
 
