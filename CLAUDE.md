@@ -5,7 +5,10 @@
 A Paperclip plugin, id `rukoz.throughput-panel`, that puts a small floating panel in the bottom-right corner of every signed-in Paperclip page. The panel shows:
 
 - the live tokens/sec of the company's local model server (vLLM serving `swift-1.5` on hpcserver), read by the plugin worker;
-- from RUK-249 on, the Claude plan usage of the signed-in user's default Claude subscription (5-hour session, weekly, weekly Fable), read by the panel itself from Paperclip's own API. The 5-hour and weekly numbers come from the `rate_limit_event` lines Claude Code writes into Claude agent run logs. Fable, plus a second reading of the other two, comes from Anthropic's usage check through Paperclip's AI-connection usage route.
+- the Claude plan usage (5-hour session, weekly, weekly Fable) of the user's Claude accounts, from one of two sources:
+  - from RUK-518 on, when Claude accounts are set in the plugin settings: one "Claude · <label>" section per account. The worker runs a tiny Claude Code request for each account (the "check", in `src/usage/probe-*.ts`) and reads the `rate_limit_event` Claude Code prints. Only while the panel is expanded, at most every `claudeCheckMinutes` per account.
+  - otherwise (RUK-249): one "Claude plan" section for the signed-in user's default Claude subscription, read by the panel itself from Paperclip's API: the `rate_limit_event` lines in `claude_local` agent run logs, plus Anthropic's usage check through Paperclip's AI-connection usage route.
+- Anthropic reports less than these sections can show. Since 2026-10-31 02:55 UTC, Claude Code's `rate_limit_event` for our account carries only the limiting window (`seven_day`), not `five_hour`. A Paperclip sign-in (`claude setup-token`) cannot read the usage route at all: it answers 403. So a missing 5-hour or Fable bar is normal; the panel says so instead of guessing. Upstream: paperclipai/paperclip#18911.
 
 Its one user is the board operator who owns this Paperclip instance and watches the agents work. `README.md` is the user-facing manual (install, configure, verify, troubleshoot); this file is for agents working on the code.
 
@@ -14,6 +17,8 @@ Its one user is the board operator who owns this Paperclip instance and watches 
 - Paperclip runs on this Mac as the launchd service `ing.paperclip.paperclipai`. The service runs `~/.local/bin/paperclipai run --instance default`, a shim for the managed install at `~/.paperclip/cli/current`. Since 2026-10-30 that is 2026.1029.0-nightly.1, moved there at the user's request (it was 2026.1023.0). The user's launchd job `com.drukoz.paperclip-local-patches` re-applies local patches to the installed Paperclip every 30 minutes and may restart it.
 - The plugin is installed from a local path: this repository's managed checkout, `~/.paperclip/instances/default/projects/f5895970-0d60-4783-9d98-ee75e99a924b/beea1c91-3d42-4a92-b871-27082af1144e/_default`. The host runs `dist/worker.js` in a worker process and serves `dist/ui/` to the browser at `/_plugins/rukoz.throughput-panel/ui/`.
 - The worker scrapes `http://127.0.0.1:18081/metrics`, a tunnel to hpcserver. The browser cannot reach that address, which is why the worker scrapes it.
+- The host starts the worker with a minimal environment (`PATH`, `NODE_PATH`, `PAPERCLIP_PLUGIN_ID`, `NODE_ENV`, `TZ`; no `HOME`). Anything the worker spawns gets an absolute executable path and an explicit environment.
+- The Claude check spawns the Claude Code CLI, `/opt/homebrew/bin/claude` by default (setting `claudePath`), with the account's token in `CLAUDE_CODE_OAUTH_TOKEN` and a private folder as `HOME` and `CLAUDE_CONFIG_DIR`.
 - The panel's UI code runs inside the Paperclip page with the user's board session. It can call Paperclip's HTTP API (`/api/...`) directly with `fetch(url, { credentials: "include" })`. The worker cannot: it has no board session.
 
 ## Layout
@@ -28,6 +33,8 @@ src/metrics/           Prometheus text parser and the rate window
 src/ui/index.tsx       the ThroughputPanel component (the whole panel)
 src/ui/format.ts       display formatters; src/ui/window.ts window helpers; src/ui/Sparkline.tsx
 src/usage/             Claude plan usage (RUK-249): contract, meter selection, usage-check client, run-log parser and reader, stored check state, view
+src/usage/probe-*.ts   the per-account Claude check (RUK-518): contract, output parser, CLI runner, controller, view
+src/ui/PlanUsageSection.tsx  one Claude section; src/ui/usePlanUsage.ts (RUK-249) and src/ui/useProbeUsage.ts (RUK-518) feed it
 scripts/build.mjs      esbuild bundling through the SDK's bundler presets
 ```
 
@@ -62,13 +69,16 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 - Node >= 24.11 (`engines` in `package.json`); 24.22.1 is installed.
 - `@paperclipai/plugin-sdk` 2026.1023.0. The host now runs 2026.1029.0-nightly.1, and the routes and response fields this plugin reads were rechecked there on 2026-10-30. Do not upgrade the SDK as a side effect of other work.
 - Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0. The fields the plugin reads are unchanged in 2026.1029.0-nightly.1, which only adds a `github` provider and an optional `environmentId`.
+- Claude Code 2.1.318, installed by Homebrew at `/opt/homebrew/bin/claude` (it moves on `brew upgrade`). The check's flags were checked against its `--help` on 2026-11-04. Do not use `--bare`: it never reads OAuth tokens, only `ANTHROPIC_API_KEY`.
 
 ## Branches and delivery
 
 - There is no GitHub remote; nothing is pushed anywhere. `main` holds only the initial commit.
 - The live plugin is built from `feature/ruk-19-throughput-panel`, which is checked out in the `_default` checkout.
 - Each parent task gets its own branch from it, for example `feature/ruk-249-claude-plan-usage`. Each subtask works in its own git worktree under `/Volumes/Storage/paperclip/worktrees/paperclip-throughput-panel/`, on a branch named `<feature-branch>-RUK-<n>`. Commit on the worktree's current branch; never switch or create branches.
-- At delivery the CTO merges the feature branch into `feature/ruk-19-throughput-panel` in `_default` and runs `npm run build` there. The user then reloads the Paperclip page.
+- On Paperclip 2026.1029.0-nightly.1 a new worktree for this repository comes up as an empty folder, so subtasks reuse the six worktrees `feature/ruk-249-claude-plan-usage-RUK-250` to `-RUK-255`. Their branch names carry old task names; each spec's Setup fast-forwards the branch to the feature branch first, and every merge commit names its task: `Merge <branch> (RUK-n)`.
+- Open work: `feature/ruk-518-usage-probe` (RUK-518) builds on `feature/ruk-249-usage-from-runs` (RUK-249's finished, undelivered rework).
+- At delivery the CTO merges the feature branch into `feature/ruk-19-throughput-panel` in `_default` and runs `npm run build` there. The user then reloads the Paperclip page, and, when the worker changed, disables and re-enables the plugin once.
 
 ## Dangers
 
@@ -77,5 +87,10 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 - The worker process does not reload when `dist/worker.js` changes. Worker changes reach users only after a plugin disable/enable or a Paperclip restart, both of which the board operator does.
 - Every call to `GET /api/companies/:companyId/ai-connections/:connectionId/usage` reads the stored Claude credential, writes a row to Paperclip's secret access log, and asks Anthropic, which rate-limits it hard: on 2026-10-30 the panel's first checks all came back 429. The panel calls it on its own at most every 15 minutes (30 after a 429) and shares that schedule across tabs through `localStorage`; ↻ forces a call only when the last attempt is at least 5 minutes old. Do not add another caller or shorten either interval; read numbers from agent run logs instead.
 - Run logs hold full agent transcripts. The panel reads only the ends of the 3 newest Claude runs' logs (`GET /api/heartbeat-runs/:runId/log?offset=…&limitBytes=…`), and reads a run again only when its size has changed. The first read starts 256 KiB before the run's `lastOutputBytes` and asks for 512 KiB, because Paperclip saves `lastOutputBytes` only once a minute and the file can be ahead of it. Claude Code writes a `rate_limit_event` only at a run's first response and when the 5-hour figure moves by a whole percent, so when that read finds none the reader steps back at most 3 times, 512 KiB each plus a 64 KiB overlap (576 KiB per request), never below the size an earlier read already searched: about 1.75 MiB before `lastOutputBytes` in all. On 2026-10-30 the farthest last event in 14 finished CTO runs was 0.56 MB before the end. It keeps only the parsed `rate_limit_event` numbers. Never display, store or send other log content, and never read whole logs in a poll.
+- Each Claude check spends a little of that account's Claude usage. Checks run only when the panel asks for the "plan-probe" data with `active: true` (the panel is expanded and the tab visible), one at a time, at most every `claudeCheckMinutes` per account. Never add a timer of the worker's own, a retry loop, or a second caller.
+- A Claude token is resolved for each check, passed only in the child process's environment, and dropped. Never log, store, return or display it, and never put it in an error message.
+- Tests never run the real `claude`; they use the fake CLI in `src/usage/fixtures/`. A test that ran it would spend real usage.
+- On timeout the check kills the child's whole process group (`detached: true`, then `process.kill(-pid, "SIGKILL")`). Paperclip's own Claude CLI probe once leaked processes until the server ran out of memory (paperclipai/paperclip#8970).
+- For a Paperclip sign-in (`claude setup-token`) the AI-connection usage route always answers 403 `permission_denied` (paperclipai/paperclip#18911): the check is the only source for those accounts.
 - The `/api/plugins` routes need a board instance-admin credential; an agent key gets `403`. Do not loop on them.
 - Never commit a token, key or secret value, including in test fixtures.
