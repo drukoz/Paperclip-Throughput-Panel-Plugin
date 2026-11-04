@@ -79,13 +79,18 @@ function MeterRow({
 /**
  * The panel's "Claude plan" section: the 5-hour session, weekly and Fable
  * weekly meters, or the reason they are missing. Presentational only.
+ * `heading` replaces the "Claude plan" title (one section per checked account);
+ * `showFable: false` hides the Fable row.
  */
 export function PlanUsageSection(props: {
   view: PlanUsageView;
   onRefresh?: () => void;
   now?: number;
+  heading?: string;
+  showFable?: boolean;
 }): ReactElement {
   const { view, onRefresh, now } = props;
+  const heading = props.heading ?? "Claude plan";
   const accountLabel =
     view.kind === "ok" || view.kind === "needs_attention"
       ? view.accountLabel
@@ -93,7 +98,7 @@ export function PlanUsageSection(props: {
   return (
     <div
       role="group"
-      aria-label="Claude plan usage"
+      aria-label={`${heading} usage`}
       style={{
         marginTop: 8,
         paddingTop: 6,
@@ -102,7 +107,7 @@ export function PlanUsageSection(props: {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontWeight: 600, flex: 1 }} title={accountLabel}>
-          Claude plan
+          {heading}
         </span>
         {view.kind === "loading" ? (
           <span style={{ color: MUTED }}>checking…</span>
@@ -125,7 +130,9 @@ export function PlanUsageSection(props: {
         <>
           <MeterRow label="5h session" row={view.usage.session} now={now} />
           <MeterRow label="Weekly" row={view.usage.weekly} now={now} />
-          <MeterRow label="Fable weekly" row={view.usage.fable} now={now} />
+          {props.showFable !== false ? (
+            <MeterRow label="Fable weekly" row={view.usage.fable} now={now} />
+          ) : null}
           {view.refreshError !== null ? (
             <div style={errMsg}>{view.refreshError}</div>
           ) : null}
