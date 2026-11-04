@@ -27,3 +27,17 @@ test("manifest declares the poll interval bounds the worker enforces", () => {
   assert.equal(pollIntervalMs?.minimum, 1000);
   assert.equal(pollIntervalMs?.maximum, 60000);
 });
+
+test("manifest declares the Claude check settings", () => {
+  const properties = manifest.instanceConfigSchema?.properties as
+    | Record<string, { type?: string; default?: number | string; minimum?: number; maximum?: number }>
+    | undefined;
+  for (const n of [1, 2, 3]) {
+    assert.equal(properties?.[`claudeAccount${n}Label`]?.type, "string");
+    assert.equal(properties?.[`claudeAccount${n}Token`]?.type, "string");
+  }
+  assert.equal(properties?.claudePath?.default, "/opt/homebrew/bin/claude");
+  assert.equal(properties?.claudeCheckMinutes?.default, 15);
+  assert.equal(properties?.claudeCheckMinutes?.minimum, 5);
+  assert.equal(properties?.claudeCheckMinutes?.maximum, 120);
+});
