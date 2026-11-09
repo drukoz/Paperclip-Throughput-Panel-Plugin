@@ -32,6 +32,17 @@ function normalizeToken(value: unknown): unknown {
   return null;
 }
 
+/** Server 2's default endpoint: the A9 Mega through the launchd forwarder `com.drukoz.llm-forward-a9`. */
+const A9_METRICS_URL = "http://127.0.0.1:18082/metrics";
+
+/**
+ * The A9 Mega's read-only metrics key, hard-coded at the owner's request (RUK-869) so the A9 works with no
+ * settings. Caddy on the A9 accepts it only for `/metrics` and `/v1/models`, never for inference
+ * (`A9_METRICS_KEY` in `/etc/caddy/a9-llm.env`). It is sent only to the default A9 URL; a `server2Token`
+ * setting overrides it. To rotate it, change it on the A9 and here together.
+ */
+const A9_METRICS_KEY = "96de6fb9fb1af39350a3f35979edae48a3fda452d427f17f56ae78db8c792b67";
+
 /** The enabled servers in slot order, from the config table in the contract. */
 export function resolveServers(
   config: Record<string, unknown> | null,
@@ -51,13 +62,13 @@ export function resolveServers(
   });
 
   const raw2 = cfg.server2MetricsUrl;
-  const url2 = typeof raw2 === "string" ? raw2.trim() : "http://127.0.0.1:18082/metrics";
+  const url2 = typeof raw2 === "string" ? raw2.trim() : A9_METRICS_URL;
   if (url2 !== "") {
     servers.push({
       slot: 2,
       label: nonBlankString(cfg.server2Label) ?? "A9 Mega",
       metricsUrl: url2,
-      token: normalizeToken(cfg.server2Token),
+      token: normalizeToken(cfg.server2Token) ?? (url2 === A9_METRICS_URL ? A9_METRICS_KEY : null),
       modelName: null,
     });
   }
