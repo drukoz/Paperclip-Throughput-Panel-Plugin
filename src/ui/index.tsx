@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { usePluginData } from "@paperclipai/plugin-sdk/ui";
 import type { PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
 import type { ThroughputSnapshot } from "../types.ts";
+import { ServerStatus } from "../types.ts";
 import type { AverageWindowKey } from "../windows.ts";
 import { AVERAGE_WINDOW_KEYS, AVERAGE_WINDOW_MS, isAverageWindowKey } from "../windows.ts";
 import { Sparkline } from "./Sparkline.tsx";
@@ -24,12 +25,12 @@ const MUTED = "rgba(250,250,250,0.55)";
 const CARD_BG = "rgba(24,24,27,0.92)";
 
 const STATUS: Record<
-  ThroughputSnapshot["status"],
+  ServerStatus,
   { color: string; title: string }
 > = {
-  ok: { color: "#22c55e", title: "Connected" },
-  starting: { color: "#a1a1aa", title: "Starting…" },
-  unreachable: { color: "#ef4444", title: "Model server unreachable" },
+  [ServerStatus.Ok]: { color: "#22c55e", title: "Connected" },
+  [ServerStatus.Starting]: { color: "#a1a1aa", title: "Starting…" },
+  [ServerStatus.Unreachable]: { color: "#ef4444", title: "Model server unreachable" },
 };
 
 const baseCard: CSSProperties = {
@@ -250,7 +251,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
   const hasRichData =
     error === null &&
     data !== null &&
-    (data.status === "ok" || data.status === "unreachable");
+    (data.status === ServerStatus.Ok || data.status === ServerStatus.Unreachable);
   const showCompact = collapsed || !hasRichData;
   // Claude usage is checked only while the card is expanded. With Claude accounts in the
   // plugin settings the worker checks each one (useProbeUsage, RUK-518); otherwise, or while
@@ -280,20 +281,20 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
   let compact: { color: string; title: string; text: string; message?: string };
   if (error !== null) {
     compact = {
-      color: STATUS.unreachable.color,
+      color: STATUS[ServerStatus.Unreachable].color,
       title: "Panel unavailable",
       text: "Panel unavailable",
       message: error.message,
     };
   } else if (data === null) {
-    compact = { color: STATUS.starting.color, title: "Starting…", text: "…" };
-  } else if (data.status === "starting") {
-    compact = { color: STATUS.starting.color, title: "Starting…", text: "Starting…" };
-  } else if (data.status === "unreachable") {
-    compact = { color: STATUS.unreachable.color, title: "Model server unreachable", text: "—" };
+    compact = { color: STATUS[ServerStatus.Starting].color, title: "Starting…", text: "…" };
+  } else if (data.status === ServerStatus.Starting) {
+    compact = { color: STATUS[ServerStatus.Starting].color, title: "Starting…", text: "Starting…" };
+  } else if (data.status === ServerStatus.Unreachable) {
+    compact = { color: STATUS[ServerStatus.Unreachable].color, title: "Model server unreachable", text: "—" };
   } else {
     compact = {
-      color: STATUS.ok.color,
+      color: STATUS[ServerStatus.Ok].color,
       title: "Connected",
       text: `${formatRate(data.instant?.generation)} tok/s`,
     };
@@ -370,7 +371,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
               </button>
             </div>
 
-            {data.status === "ok" ? (
+            {data.status === ServerStatus.Ok ? (
               <>
                 <div
                   style={{
@@ -406,7 +407,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
             ) : (
               <>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <StatusDot status="unreachable" />
+                  <StatusDot status={ServerStatus.Unreachable} />
                   <span style={{ fontWeight: 600 }}>Model server unreachable</span>
                 </div>
                 {data.error ? <div style={errMsg}>{data.error}</div> : null}

@@ -188,11 +188,11 @@ export function selectSample(
       .filter((s) => s.name === name && Number.isFinite(s.value))
       .reduce((sum, s) => sum + s.value, 0);
 
-  const maxMetric = (name: string): number => {
+  const maxOrNull = (name: string): number | null => {
     const values = filtered
       .filter((s) => s.name === name && Number.isFinite(s.value))
       .map((s) => s.value);
-    return values.length > 0 ? Math.max(...values) : 0;
+    return values.length > 0 ? Math.max(...values) : null;
   };
 
   const sample: MetricsSample = {
@@ -205,7 +205,11 @@ export function selectSample(
     specDraftTokens: sumMetric("vllm:spec_decode_num_draft_tokens_total"),
     numRequestsRunning: sumMetric("vllm:num_requests_running"),
     numRequestsWaiting: sumMetric("vllm:num_requests_waiting"),
-    kvCacheUsage: maxMetric("vllm:kv_cache_usage_perc"),
+    kvCacheUsage: maxOrNull("vllm:kv_cache_usage_perc"),
+    decodeTokens: sumMetric("vllm:inter_token_latency_seconds_count"),
+    decodeSeconds: sumMetric("vllm:inter_token_latency_seconds_sum"),
+    firstTokenSeconds: sumMetric("vllm:time_to_first_token_seconds_sum"),
+    firstTokenCount: sumMetric("vllm:time_to_first_token_seconds_count"),
   };
 
   return { sample, modelName };

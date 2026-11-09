@@ -30,6 +30,10 @@ test("live fixture sample is exact", () => {
     numRequestsRunning: 1,
     numRequestsWaiting: 0,
     kvCacheUsage: 0.09366076527698453,
+    decodeTokens: 79622,
+    decodeSeconds: 5231.041851938971,
+    firstTokenSeconds: 303.73803997039795,
+    firstTokenCount: 318,
   });
 });
 

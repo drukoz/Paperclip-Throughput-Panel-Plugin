@@ -15,6 +15,10 @@ function sample(at: number, overrides: Partial<MetricsSample> = {}): MetricsSamp
     numRequestsRunning: 0,
     numRequestsWaiting: 0,
     kvCacheUsage: 0,
+    decodeTokens: 0,
+    decodeSeconds: 0,
+    firstTokenSeconds: 0,
+    firstTokenCount: 0,
     ...overrides,
   };
 }
