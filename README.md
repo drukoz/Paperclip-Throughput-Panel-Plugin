@@ -12,8 +12,8 @@ Each model block shows:
 - Per-request tok/s — the speed a single agent sees while decoding (decode tokens divided by decode time)
 - Time to first token (TTFT), the mean over requests in the window (vLLM only)
 - Requests running and waiting
-- KV cache usage (vLLM only)
-- Prefix-cache hit rate (vLLM only)
+- KV cache usage (vLLM, and llama.cpp servers that report it, such as the A9's Gufo)
+- Prefix-cache hit rate (vLLM, and llama.cpp servers that report it, such as the A9's Gufo)
 - MTP / draft (speculative decoding) acceptance rate
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`

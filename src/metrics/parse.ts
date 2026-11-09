@@ -221,24 +221,41 @@ export function selectSample(
   return m === null ? null : { sample: m.sample, modelName: m.modelName };
 }
 
-/** Assemble the single llama.cpp sample. Its metrics carry no labels, so every name is summed over all series. */
+/**
+ * Assemble the single llama.cpp sample. Its metrics carry no labels, so every name is summed
+ * over all series. Gufo (the A9's llama.cpp fork) adds two metrics stock llama.cpp lacks:
+ * `prompt_tokens_cached_total`, whose presence enables the prefix-cache counters (Gufo's
+ * `prompt_tokens_total` excludes cache hits, so queries are the two summed; stock llama.cpp
+ * has no cached metric and stays at 0 so the hit rate reads null, not a false 0 %), and
+ * `kv_cache_usage_ratio`, a 0..1 ratio on vLLM's `kv_cache_usage_perc` scale.
+ */
 function llamaCppSample(series: PromSeries[], at: number): MetricsSample {
   const sum = (name: string): number =>
     series
       .filter((s) => s.name === name && Number.isFinite(s.value))
       .reduce((total, s) => total + s.value, 0);
 
+  const maxOrNull = (name: string): number | null => {
+    const values = series
+      .filter((s) => s.name === name && Number.isFinite(s.value))
+      .map((s) => s.value);
+    return values.length > 0 ? Math.max(...values) : null;
+  };
+
+  const prefixCacheHits = sum("llamacpp:prompt_tokens_cached_total");
+  const hasCachedMetric = series.some((s) => s.name === "llamacpp:prompt_tokens_cached_total");
+
   return {
     at,
     generationTokens: sum("llamacpp:tokens_predicted_total"),
     promptTokens: sum("llamacpp:prompt_tokens_total"),
-    prefixCacheHits: 0,
-    prefixCacheQueries: 0,
+    prefixCacheHits: hasCachedMetric ? prefixCacheHits : 0,
+    prefixCacheQueries: hasCachedMetric ? prefixCacheHits + sum("llamacpp:prompt_tokens_total") : 0,
     specAcceptedTokens: sum("llamacpp:spec_decode_num_accepted_tokens_total"),
     specDraftTokens: sum("llamacpp:spec_decode_num_draft_tokens_total"),
     numRequestsRunning: sum("llamacpp:requests_processing"),
     numRequestsWaiting: sum("llamacpp:requests_deferred"),
-    kvCacheUsage: null,
+    kvCacheUsage: maxOrNull("llamacpp:kv_cache_usage_ratio"),
     decodeTokens: sum("llamacpp:tokens_predicted_total"),
     decodeSeconds: sum("llamacpp:tokens_predicted_seconds_total"),
     firstTokenSeconds: 0,
