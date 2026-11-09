@@ -5,7 +5,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.1.0",
   displayName: "Model Throughput Panel",
-  description: "Live tokens/sec readout for the local vLLM model server.",
+  description: "Live tokens/sec readout for every local model server (vLLM and llama.cpp).",
   author: "Rukoz Ent",
   categories: ["ui"],
   minimumHostVersion: "2026.1023.0",
@@ -19,23 +19,65 @@ const manifest: PaperclipPluginManifestV1 = {
   instanceConfigSchema: {
     type: "object",
     properties: {
+      server1Label: {
+        type: "string",
+        title: "Server 1: label",
+        description: "Shown in the panel.",
+        default: "hpcserver",
+      },
       metricsUrl: {
         type: "string",
-        title: "Metrics URL",
-        description: "Prometheus metrics endpoint of the vLLM server.",
+        title: "Server 1: metrics URL",
+        description:
+          "Prometheus /metrics endpoint of the first model server (vLLM or llama.cpp).",
         default: "http://127.0.0.1:18081/metrics",
       },
       authToken: {
-        type: "string",
-        title: "Bearer token",
+        format: "secret-ref",
+        title: "Server 1: token",
         description:
-          "Optional. Sent as `Authorization: Bearer <token>`. Prefer a secret reference over a literal value.",
+          "Optional. Sent as Authorization: Bearer <token>. hpcserver needs none.",
       },
       modelName: {
         type: "string",
-        title: "Model name label",
-        description: "Value of the `model_name` label to read.",
-        default: "swift-1.5",
+        title: "Server 1: model filter",
+        description:
+          "Optional. Show only this model_name. Leave blank to show every model the server serves.",
+      },
+      server2Label: {
+        type: "string",
+        title: "Server 2: label",
+        description: "Shown in the panel.",
+        default: "A9 Mega",
+      },
+      server2MetricsUrl: {
+        type: "string",
+        title: "Server 2: metrics URL",
+        description:
+          "The A9 Mega (Strix Halo). Save it empty to hide this server.",
+        default: "http://127.0.0.1:18082/metrics",
+      },
+      server2Token: {
+        format: "secret-ref",
+        title: "Server 2: token",
+        description:
+          "The A9 Mega's API key: pick the Paperclip secret that the 'A9 Mega local endpoint' AI connection uses, or press + to store it. Without it the A9 answers 401.",
+      },
+      server3Label: {
+        type: "string",
+        title: "Server 3: label",
+        description: "Shown in the panel.",
+        default: "Server 3",
+      },
+      server3MetricsUrl: {
+        type: "string",
+        title: "Server 3: metrics URL",
+        description: "Optional. Leave empty to hide this server.",
+      },
+      server3Token: {
+        format: "secret-ref",
+        title: "Server 3: token",
+        description: "Optional bearer token for server 3.",
       },
       pollIntervalMs: {
         type: "number",
