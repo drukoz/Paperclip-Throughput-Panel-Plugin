@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
+import { ServerStatus } from "./types.ts";
 import plugin, { resolveProbeSettings } from "./worker.ts";
 
 const METRICS_OK = [
@@ -86,8 +87,8 @@ test("a rejected fetch yields unreachable and the poll loop keeps running", asyn
   try {
     await plugin.definition.setup(ctx);
     await waitFor(() => calls.length >= 1, 2000);
-    const snap = (await snapshot()) as { status: string; error: string | null };
-    assert.equal(snap.status, "unreachable");
+    const snap = (await snapshot()) as { status: number; error: string | null };
+    assert.equal(snap.status, ServerStatus.Unreachable);
     assert.match(snap.error ?? "", /ECONNREFUSED/);
     // The rejection must not kill the interval: a second poll has to happen.
     await waitFor(() => calls.length >= 2, 5000);
@@ -111,8 +112,8 @@ test("a non-200 response yields unreachable with the HTTP status in the error", 
   try {
     await plugin.definition.setup(ctx);
     await waitFor(() => calls.length >= 1, 2000);
-    const snap = (await snapshot()) as { status: string; error: string | null };
-    assert.equal(snap.status, "unreachable");
+    const snap = (await snapshot()) as { status: number; error: string | null };
+    assert.equal(snap.status, ServerStatus.Unreachable);
     assert.equal(snap.error, "HTTP 404 Not Found");
   } finally {
     globalThis.fetch = realFetch;
@@ -206,8 +207,8 @@ test("a private/reserved-range rejection leaves the snapshot unreachable and doe
   try {
     await plugin.definition.setup(ctx);
     await waitFor(() => calls.length >= 1, 2000);
-    const snap = (await snapshot()) as { status: string; error: string | null };
-    assert.equal(snap.status, "unreachable");
+    const snap = (await snapshot()) as { status: number; error: string | null };
+    assert.equal(snap.status, ServerStatus.Unreachable);
     assert.match(snap.error ?? "", /private\/reserved ranges/);
   } finally {
     globalThis.fetch = realFetch;

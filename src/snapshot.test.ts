@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { MetricsSample } from "./types.ts";
+import { ServerStatus } from "./types.ts";
 import { ThroughputWindow } from "./metrics/rates.ts";
 import { buildSnapshot } from "./snapshot.ts";
 
@@ -16,6 +17,10 @@ function sample(at: number, overrides: Partial<MetricsSample> = {}): MetricsSamp
     numRequestsRunning: 0,
     numRequestsWaiting: 0,
     kvCacheUsage: 0,
+    decodeTokens: 0,
+    decodeSeconds: 0,
+    firstTokenSeconds: 0,
+    firstTokenCount: 0,
     ...overrides,
   };
 }
@@ -23,7 +28,7 @@ function sample(at: number, overrides: Partial<MetricsSample> = {}): MetricsSamp
 test("status is starting before the first scrape completes", () => {
   const w = new ThroughputWindow();
   const snap = buildSnapshot({ window: w, lastError: null, started: false, modelName: null });
-  assert.equal(snap.status, "starting");
+  assert.equal(snap.status, ServerStatus.Starting);
   assert.equal(snap.instant, null);
   assert.deepEqual(snap.averages, { "1m": null, "5m": null, "15m": null });
 });
@@ -31,7 +36,7 @@ test("status is starting before the first scrape completes", () => {
 test("empty window with no error reports ok with no data", () => {
   const w = new ThroughputWindow();
   const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
-  assert.equal(snap.status, "ok");
+  assert.equal(snap.status, ServerStatus.Ok);
   assert.equal(snap.lastSampleAt, null);
   assert.deepEqual(snap.sparkline, []);
 });
@@ -41,7 +46,7 @@ test("ok snapshot carries instant rates and the newer sample time", () => {
   w.push(sample(0, { generationTokens: 0 }));
   w.push(sample(5000, { generationTokens: 500 }));
   const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: "swift-1.5" });
-  assert.equal(snap.status, "ok");
+  assert.equal(snap.status, ServerStatus.Ok);
   assert.ok(snap.instant);
   assert.equal(snap.instant.generation, 100);
   assert.equal(snap.lastSampleAt, new Date(5000).toISOString());
@@ -53,7 +58,7 @@ test("ok snapshot fills every selectable average window", () => {
     w.push(sample(i * 5000, { generationTokens: i * 500 }));
   }
   const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
-  assert.equal(snap.status, "ok");
+  assert.equal(snap.status, ServerStatus.Ok);
   for (const key of ["1m", "5m", "15m"] as const) {
     assert.ok(snap.averages[key]);
   }
@@ -96,7 +101,7 @@ test("historySpanMs is set for starting and unreachable statuses", () => {
     started: false,
     modelName: null,
   });
-  assert.equal(starting.status, "starting");
+  assert.equal(starting.status, ServerStatus.Starting);
   assert.equal(starting.historySpanMs, 12000);
 
   const unreachable = buildSnapshot({
@@ -105,7 +110,7 @@ test("historySpanMs is set for starting and unreachable statuses", () => {
     started: true,
     modelName: null,
   });
-  assert.equal(unreachable.status, "unreachable");
+  assert.equal(unreachable.status, ServerStatus.Unreachable);
   assert.equal(unreachable.historySpanMs, 12000);
 });
 
@@ -133,7 +138,7 @@ test("unreachable snapshot nulls point-in-time readings but keeps history", () =
     started: true,
     modelName: "swift-1.5",
   });
-  assert.equal(snap.status, "unreachable");
+  assert.equal(snap.status, ServerStatus.Unreachable);
   assert.equal(snap.error, "boom");
   assert.equal(snap.instant, null);
   assert.deepEqual(snap.averages, { "1m": null, "5m": null, "15m": null });
@@ -163,7 +168,7 @@ test("an idle tail does not drag the snapshot averages down", () => {
   const w = new ThroughputWindow();
   pushSixtySecondsThenIdleTail(w);
   const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
-  assert.equal(snap.status, "ok");
+  assert.equal(snap.status, ServerStatus.Ok);
   assert.equal(snap.averages["1m"]!.generation, 0);
   assert.equal(snap.averages["5m"]!.generation, 100);
   assert.equal(snap.averages["15m"]!.generation, 100);
@@ -178,7 +183,7 @@ test("a fully idle window reads 0, not null", () => {
   w.push(sample(5000));
   w.push(sample(10000));
   const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
-  assert.equal(snap.status, "ok");
+  assert.equal(snap.status, ServerStatus.Ok);
   for (const key of ["1m", "5m", "15m"] as const) {
     assert.ok(snap.averages[key]);
     assert.equal(snap.averages[key]!.generation, 0);
@@ -195,7 +200,7 @@ test("averages stay null when the status is not ok", () => {
     started: false,
     modelName: null,
   });
-  assert.equal(starting.status, "starting");
+  assert.equal(starting.status, ServerStatus.Starting);
   assert.deepEqual(starting.averages, { "1m": null, "5m": null, "15m": null });
   const unreachable = buildSnapshot({
     window: w,
@@ -203,6 +208,6 @@ test("averages stay null when the status is not ok", () => {
     started: true,
     modelName: null,
   });
-  assert.equal(unreachable.status, "unreachable");
+  assert.equal(unreachable.status, ServerStatus.Unreachable);
   assert.deepEqual(unreachable.averages, { "1m": null, "5m": null, "15m": null });
 });

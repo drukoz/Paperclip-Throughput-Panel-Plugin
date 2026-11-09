@@ -142,3 +142,11 @@ test("selectSample returns null when generation counter is missing", () => {
   const result = selectSample(series, { at: 0 });
   assert.equal(result, null);
 });
+
+test("selectSample leaves kvCacheUsage null when the gauge is absent", () => {
+  const input = 'vllm:generation_tokens_total{engine="0",model_name="m"} 10';
+  const series = parsePrometheusText(input);
+  const result = selectSample(series, { at: 0 });
+  assert.equal(result?.sample.kvCacheUsage, null);
+  assert.equal(result?.sample.decodeTokens, 0);
+});
