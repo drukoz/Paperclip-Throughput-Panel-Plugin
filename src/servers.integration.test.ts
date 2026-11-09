@@ -138,6 +138,7 @@ test("both servers are read, every model named", async () => {
       metricsUrl: `${vllmBase}/metrics`,
       server2MetricsUrl: `${llamaBase}/metrics`,
       server2Token: TEST_TOKEN,
+      server3MetricsUrl: "",
       pollIntervalMs: 1000,
     },
   });
@@ -187,6 +188,7 @@ test("the A9 without its token says so", async () => {
     config: {
       metricsUrl: `${vllmBase}/metrics`,
       server2MetricsUrl: `${llamaBase}/metrics`,
+      server3MetricsUrl: "",
       pollIntervalMs: 1000,
     },
   });
@@ -213,7 +215,7 @@ test("the A9 without its token says so", async () => {
 test("a secret-ref token is resolved with the company id", async () => {
   const resolves: unknown[] = [];
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", pollIntervalMs: 1000 },
+    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", server3MetricsUrl: "", pollIntervalMs: 1000 },
     resolveSecret: async (_ref, options) => {
       resolves.push(options);
       return TEST_TOKEN;
@@ -222,6 +224,7 @@ test("a secret-ref token is resolved with the company id", async () => {
   const config = {
     metricsUrl: `${vllmBase}/metrics`,
     server2MetricsUrl: `${llamaBase}/metrics`,
+    server3MetricsUrl: "",
     server2Token: { type: "secret_ref", secretId: "33333333-4444-5555-6666-777777777777" },
     pollIntervalMs: 1000,
   };
@@ -244,7 +247,7 @@ test("a secret-ref token is resolved with the company id", async () => {
 
 test("saving server2MetricsUrl empty hides the A9", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "" },
+    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", server3MetricsUrl: "" },
   });
   try {
     await plugin.definition.setup(ctx);

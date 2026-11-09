@@ -88,21 +88,26 @@ const slot2: ServerSetting = {
   modelName: null,
 };
 
-test("resolveServers with no config gives hpcserver and the A9", () => {
+test("resolveServers with no config gives hpcserver, the A9 and the M5U", () => {
   const servers = resolveServers(null, {});
   assert.deepEqual(
     servers.map((s) => s.slot),
-    [1, 2],
+    [1, 2, 3],
   );
   assert.deepEqual(
     servers.map((s) => s.label),
-    ["hpcserver", "A9 Mega"],
+    ["hpcserver", "A9 Mega", "M5U"],
   );
   assert.deepEqual(
     servers.map((s) => s.metricsUrl),
-    ["http://127.0.0.1:18081/metrics", "http://127.0.0.1:18082/metrics"],
+    [
+      "http://127.0.0.1:18081/metrics",
+      "http://127.0.0.1:18082/metrics",
+      "http://127.0.0.1:18083/admin/api/activity",
+    ],
   );
   assert.equal(servers[0]?.token, null);
+  assert.equal(servers[2]?.token, null);
   // The A9 gets its built-in read-only metrics key (never written out in a test).
   assert.match(String(servers[1]?.token), /^[0-9a-f]{64}$/);
   for (const s of servers) assert.equal(s.modelName, null);
@@ -128,6 +133,21 @@ test("resolveServers hides slot 2 when its URL is saved empty and adds slot 3 wh
   assert.ok(slot3);
   assert.equal(slot3.metricsUrl, "http://x:1/metrics");
   assert.equal(slot3.label, "Lab");
+});
+
+test("resolveServers hides slot 3 when its URL is saved empty", () => {
+  const servers = resolveServers({ server3MetricsUrl: "" }, {});
+  assert.deepEqual(
+    servers.map((s) => s.slot),
+    [1, 2],
+  );
+});
+
+test("resolveServers sends server3Token only from the settings", () => {
+  const bare = resolveServers({}, {});
+  assert.equal(bare[2]?.token, null);
+  const withRef = resolveServers({ server3Token: { type: "secret_ref", secretId: "s" } }, {});
+  assert.deepEqual(withRef[2]?.token, { type: "secret_ref", secretId: "s" });
 });
 
 test("resolveServers keeps secret refs and trims strings", () => {
