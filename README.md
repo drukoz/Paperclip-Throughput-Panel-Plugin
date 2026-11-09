@@ -189,7 +189,7 @@ Run these on the Paperclip host. The two `/api/plugins` routes below need a **bo
    curl -s http://127.0.0.1:18081/metrics | grep vllm:generation_tokens_total
    ```
 
-   Server 2 (the A9 Mega, behind Caddy, needs the key). Type the key into your own shell's `A9_KEY` variable — never paste it into the plugin settings, a chat, a file, or anywhere it is logged:
+   Server 2 (the A9 Mega, behind Caddy, needs the key). Type the key into your own shell's `A9_KEY` variable — never paste it as plain text into a chat, a file, or anywhere it is logged (in the plugin settings it goes in only through the secret picker of **Server 2: token**):
 
    ```bash
    read -rs A9_KEY   # type the A9 key, press Enter; it stays in your shell only
