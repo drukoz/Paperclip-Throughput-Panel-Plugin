@@ -95,7 +95,7 @@ Configuration is company-scoped. There are two ways to set it:
 | `modelName` | string | *(none)* | Server 1's model filter: show only this `model_name`. Blank shows every model the server serves. |
 | `server2Label` | string | `A9 Mega` | Server 2's label, shown in the panel. |
 | `server2MetricsUrl` | string | `http://127.0.0.1:18082/metrics` | Server 2's Prometheus `/metrics` endpoint — the A9 Mega (Strix Halo). Save it empty to hide this server. |
-| `server2Token` | secret | *(none)* | Server 2's bearer token. The A9 Mega answers 401 without it. |
+| `server2Token` | secret | *(built-in A9 metrics key)* | Server 2's bearer token. Leave it empty for the A9 Mega: the plugin has its read-only metrics key built in. |
 | `server3Label` | string | `Server 3` | Server 3's label, shown in the panel. |
 | `server3MetricsUrl` | string | *(none)* | Server 3's Prometheus `/metrics` endpoint. Optional; leave empty to hide this server. |
 | `server3Token` | secret | *(none)* | Server 3's optional bearer token. |
@@ -107,7 +107,7 @@ Configuration is company-scoped. There are two ways to set it:
 
 A server slot is enabled when its metrics URL, after defaults, is a non-blank string: server 1 is always on; server 2 is on unless `server2MetricsUrl` is saved as an empty string; server 3 is on only when `server3MetricsUrl` is set.
 
-The current hpcserver endpoint answers with HTTP 200 and no `Authorization` header, so `authToken` is optional — the plugin sends a token to a server only when that server has one configured. The A9 Mega is behind Caddy, which answers 401 to every request without `Authorization: Bearer <key>`, so `server2Token` is required there.
+The current hpcserver endpoint answers with HTTP 200 and no `Authorization` header, so `authToken` is optional — the plugin sends a token to a server only when that server has one configured. The A9 Mega is behind Caddy, which answers 401 to every request without `Authorization: Bearer <key>`, so the plugin sends its built-in read-only A9 metrics key there (Caddy accepts that key only for `/metrics` and `/v1/models`). `server2Token`, when set, replaces it.
 
 ### The token
 
@@ -119,9 +119,9 @@ For the config route, the `authToken` value may be either a literal string or a 
 { "type": "secret_ref", "secretId": "<uuid>" }
 ```
 
-The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.**
+The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.** The one exception is the A9 Mega's read-only metrics key in `src/servers.ts` (see `CLAUDE.md`).
 
-Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. To set the A9 Mega's key, open the plugin settings and, under **Server 2: token**, pick the secret that the "A9 Mega local endpoint" AI connection uses (or press **+** to store the key as a new secret). Until you do, that server's section shows `HTTP 401 … set this server's token`.
+Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. The A9 Mega needs nothing here: with **Server 2: token** empty and the default URL, the plugin sends its built-in read-only metrics key. Set the field only to use a different key; if you point server 2 at another URL, the built-in key is not sent.
 
 ### Claude accounts
 

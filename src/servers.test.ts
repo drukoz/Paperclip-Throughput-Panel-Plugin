@@ -102,10 +102,17 @@ test("resolveServers with no config gives hpcserver and the A9", () => {
     servers.map((s) => s.metricsUrl),
     ["http://127.0.0.1:18081/metrics", "http://127.0.0.1:18082/metrics"],
   );
-  for (const s of servers) {
-    assert.equal(s.token, null);
-    assert.equal(s.modelName, null);
-  }
+  assert.equal(servers[0]?.token, null);
+  // The A9 gets its built-in read-only metrics key (never written out in a test).
+  assert.match(String(servers[1]?.token), /^[0-9a-f]{64}$/);
+  for (const s of servers) assert.equal(s.modelName, null);
+});
+
+test("resolveServers sends the built-in A9 key only to the default A9 URL", () => {
+  const moved = resolveServers({ server2MetricsUrl: "http://10.0.0.9:8081/metrics" }, {});
+  assert.equal(moved[1]?.token, null);
+  const overridden = resolveServers({ server2Token: "  my-token " }, {});
+  assert.equal(overridden[1]?.token, "my-token");
 });
 
 test("resolveServers hides slot 2 when its URL is saved empty and adds slot 3 when set", () => {
