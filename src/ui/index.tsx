@@ -2,13 +2,25 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { usePluginData } from "@paperclipai/plugin-sdk/ui";
 import type { PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
-import type { ThroughputSnapshot } from "../types.ts";
+import type {
+  ServersSnapshot,
+  ServerSnapshot,
+  ThroughputSnapshot,
+} from "../types.ts";
 import { ServerStatus } from "../types.ts";
 import type { AverageWindowKey } from "../windows.ts";
 import { AVERAGE_WINDOW_KEYS, AVERAGE_WINDOW_MS, isAverageWindowKey } from "../windows.ts";
 import { Sparkline } from "./Sparkline.tsx";
 import { formatAge, formatCount, formatPct, formatRate } from "./format.ts";
 import { averageTitle, pointsInWindow, windowCaption } from "./window.ts";
+import {
+  HEALTH_STYLE,
+  PanelHealth,
+  formatTtft,
+  kindLabel,
+  panelHealth,
+  totalGeneration,
+} from "./servers-view.ts";
 import { PlanUsageSection } from "./PlanUsageSection.tsx";
 import { usePlanUsage } from "./usePlanUsage.ts";
 import { useProbeUsage } from "./useProbeUsage.ts";
@@ -137,22 +149,101 @@ function Cell({
   );
 }
 
-function StatGrid({ data }: { data: ThroughputSnapshot }) {
+function ModelBlock({
+  model,
+  windowKey,
+}: {
+  model: ThroughputSnapshot;
+  windowKey: AverageWindowKey;
+}) {
+  return (
+    <div>
+      <div style={{ color: MUTED }}>{model.modelName ?? "model"}</div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <span style={{ fontSize: 18, fontWeight: 600 }}>
+            {formatRate(model.instant?.generation)}
+          </span>
+          <span style={{ color: MUTED, marginLeft: 3 }}>tok/s</span>
+        </div>
+        <span
+          style={{ color: MUTED }}
+          title={averageTitle(windowKey, model.historySpanMs)}
+        >
+          {windowKey} avg {formatRate(model.averages[windowKey]?.generation)}
+        </span>
+      </div>
+      <SparklineBlock
+        points={pointsInWindow(model.sparkline, AVERAGE_WINDOW_MS[windowKey])}
+        caption={windowCaption(windowKey)}
+      />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "2px 8px",
+          marginTop: 6,
+        }}
+      >
+        <Cell
+          label="per req"
+          value={formatRate(model.perRequestTokensPerSec[windowKey])}
+          unit=" tok/s"
+        />
+        <Cell label="ttft" value={formatTtft(model.timeToFirstTokenMs[windowKey])} />
+        <Cell label="prompt" value={formatRate(model.instant?.prompt)} unit=" tok/s" />
+        <Cell label="running" value={formatCount(model.numRequestsRunning)} />
+        <Cell label="waiting" value={formatCount(model.numRequestsWaiting)} />
+        <Cell label="kv cache" value={formatPct(model.kvCacheUsagePct)} />
+        <Cell label="cache hit" value={formatPct(model.prefixCacheHitRatePct)} />
+        <Cell label="mtp acc" value={formatPct(model.mtpAcceptanceRatePct)} />
+      </div>
+    </div>
+  );
+}
+
+function ServerSection({
+  server,
+  windowKey,
+}: {
+  server: ServerSnapshot;
+  windowKey: AverageWindowKey;
+}) {
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: "2px 8px",
-        marginTop: 6,
+        borderTop: "1px solid rgba(255,255,255,0.12)",
+        marginTop: 8,
+        paddingTop: 6,
       }}
     >
-      <Cell label="prompt" value={formatRate(data.instant?.prompt)} unit=" tok/s" />
-      <Cell label="running" value={formatCount(data.numRequestsRunning)} />
-      <Cell label="waiting" value={formatCount(data.numRequestsWaiting)} />
-      <Cell label="kv cache" value={formatPct(data.kvCacheUsagePct)} />
-      <Cell label="cache hit" value={formatPct(data.prefixCacheHitRatePct)} />
-      <Cell label="mtp acc" value={formatPct(data.mtpAcceptanceRatePct)} />
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontWeight: 600, flex: 1 }}>{server.label}</span>
+        <span style={{ color: MUTED }}>{kindLabel(server.kind)}</span>
+        <StatusDot status={server.status} />
+      </div>
+      {server.status === ServerStatus.Unreachable ? (
+        <>
+          {server.error ? <div style={errMsg}>{server.error}</div> : null}
+          <div style={{ color: MUTED, fontSize: 10, marginTop: 4 }}>
+            last seen {formatAge(server.lastSampleAt)}
+          </div>
+        </>
+      ) : null}
+      {server.status === ServerStatus.Ok && server.models.length === 0 ? (
+        <div style={{ color: MUTED, fontSize: 10, marginTop: 4 }}>no models reported</div>
+      ) : null}
+      {server.models.map((model, index) => (
+        <div key={model.modelName ?? ""} style={index > 0 ? { marginTop: 8 } : undefined}>
+          <ModelBlock model={model} windowKey={windowKey} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -201,8 +292,22 @@ function WindowSelector({
   );
 }
 
+/** Per-server `label: <rate> tok/s` lines for the pill tooltip; unreachable servers read "unreachable". */
+function serverBreakdown(servers: ServerSnapshot[]): string {
+  return servers
+    .map((server) => {
+      if (server.status === ServerStatus.Unreachable) return `${server.label}: unreachable`;
+      let sum = 0;
+      for (const model of server.models) {
+        if (model.instant !== null) sum += model.instant.generation;
+      }
+      return `${server.label}: ${formatRate(sum)} tok/s`;
+    })
+    .join(" · ");
+}
+
 export function ThroughputPanel({ context }: PluginWidgetProps) {
-  const { data, error, refresh } = usePluginData<ThroughputSnapshot>("throughput");
+  const { data, error, refresh } = usePluginData<ServersSnapshot>("servers");
 
   useEffect(() => {
     const id = setInterval(() => refresh(), 5000);
@@ -247,11 +352,10 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
     });
   }
 
-  // Rich card only when we have a real snapshot; otherwise a compact pill.
+  // Rich card only when at least one server has reported; otherwise a compact pill.
+  const health = data === null ? PanelHealth.Starting : panelHealth(data.servers);
   const hasRichData =
-    error === null &&
-    data !== null &&
-    (data.status === ServerStatus.Ok || data.status === ServerStatus.Unreachable);
+    error === null && data !== null && health !== PanelHealth.Starting;
   const showCompact = collapsed || !hasRichData;
   // Claude usage is checked only while the card is expanded. With Claude accounts in the
   // plugin settings the worker checks each one (useProbeUsage, RUK-518); otherwise, or while
@@ -287,16 +391,17 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
       message: error.message,
     };
   } else if (data === null) {
-    compact = { color: STATUS[ServerStatus.Starting].color, title: "Starting…", text: "…" };
-  } else if (data.status === ServerStatus.Starting) {
-    compact = { color: STATUS[ServerStatus.Starting].color, title: "Starting…", text: "Starting…" };
-  } else if (data.status === ServerStatus.Unreachable) {
-    compact = { color: STATUS[ServerStatus.Unreachable].color, title: "Model server unreachable", text: "—" };
+    compact = { color: HEALTH_STYLE[PanelHealth.Starting].color, title: "Starting…", text: "…" };
+  } else if (health === PanelHealth.Starting) {
+    compact = { color: HEALTH_STYLE[PanelHealth.Starting].color, title: "Starting…", text: "Starting…" };
+  } else if (health === PanelHealth.Down) {
+    const style = HEALTH_STYLE[PanelHealth.Down];
+    compact = { color: style.color, title: style.title, text: "—" };
   } else {
     compact = {
-      color: STATUS[ServerStatus.Ok].color,
-      title: "Connected",
-      text: `${formatRate(data.instant?.generation)} tok/s`,
+      color: HEALTH_STYLE[health].color,
+      title: serverBreakdown(data.servers),
+      text: `${formatRate(totalGeneration(data.servers))} tok/s`,
     };
   }
 
@@ -347,8 +452,14 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
           <div
             role="status"
             aria-live="polite"
-            aria-label={data.modelName ?? "Model throughput"}
-            style={{ ...baseCard, width: 232, padding: "8px 10px" }}
+            aria-label="Model throughput"
+            style={{
+              ...baseCard,
+              width: 232,
+              padding: "8px 10px",
+              maxHeight: "calc(100vh - 32px)",
+              overflowY: "auto",
+            }}
           >
             <div
               style={{
@@ -359,7 +470,10 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
               }}
             >
               <span style={{ fontWeight: 600, flex: 1 }}>Model throughput</span>
-              <StatusDot status={data.status} />
+              <span
+                title={HEALTH_STYLE[health].title}
+                style={dotStyle(HEALTH_STYLE[health].color)}
+              />
               <button
                 type="button"
                 onClick={toggleCollapsed}
@@ -371,58 +485,11 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
               </button>
             </div>
 
-            {data.status === ServerStatus.Ok ? (
-              <>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "baseline",
-                    justifyContent: "space-between",
-                  }}
-                >
-                  <div>
-                    <span style={{ fontSize: 18, fontWeight: 600 }}>
-                      {formatRate(data.instant?.generation)}
-                    </span>
-                    <span style={{ color: MUTED, marginLeft: 3 }}>tok/s</span>
-                  </div>
-                  <span
-                    style={{ color: MUTED }}
-                    title={averageTitle(windowKey, data.historySpanMs)}
-                  >
-                    {windowKey} avg {formatRate(data.averages[windowKey]?.generation)}
-                  </span>
-                </div>
-                <WindowSelector selected={windowKey} onSelect={selectWindow} />
-                <SparklineBlock
-                  points={pointsInWindow(data.sparkline, AVERAGE_WINDOW_MS[windowKey])}
-                  caption={windowCaption(windowKey)}
-                />
-                <StatGrid data={data} />
-                <div style={{ color: MUTED, fontSize: 10, marginTop: 6 }}>
-                  {data.modelName ?? "—"} · {formatAge(data.lastSampleAt)}
-                </div>
-                {claudeSections}
-              </>
-            ) : (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <StatusDot status={ServerStatus.Unreachable} />
-                  <span style={{ fontWeight: 600 }}>Model server unreachable</span>
-                </div>
-                {data.error ? <div style={errMsg}>{data.error}</div> : null}
-                <WindowSelector selected={windowKey} onSelect={selectWindow} />
-                <SparklineBlock
-                  points={pointsInWindow(data.sparkline, AVERAGE_WINDOW_MS[windowKey])}
-                  caption={`${windowCaption(windowKey)} (stale)`}
-                />
-                <div style={{ color: MUTED, fontSize: 10, marginTop: 6 }}>
-                  last seen {formatAge(data.lastSampleAt)}
-                </div>
-                <StatGrid data={data} />
-                {claudeSections}
-              </>
-            )}
+            <WindowSelector selected={windowKey} onSelect={selectWindow} />
+            {data.servers.map((server) => (
+              <ServerSection key={server.slot} server={server} windowKey={windowKey} />
+            ))}
+            {claudeSections}
           </div>
         )
       )}
