@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parsePrometheusText, selectSample } from "./parse.ts";
+import { parsePrometheusText, selectSample, selectSamples } from "./parse.ts";
+import { ServerKind } from "../types.ts";
 
 test("parses a name with no labels", () => {
   const result = parsePrometheusText("up 1");
@@ -149,4 +151,99 @@ test("selectSample leaves kvCacheUsage null when the gauge is absent", () => {
   const result = selectSample(series, { at: 0 });
   assert.equal(result?.sample.kvCacheUsage, null);
   assert.equal(result?.sample.decodeTokens, 0);
+});
+
+const LLAMA_FIXTURE = readFileSync(
+  new URL("./fixtures/llamacpp-metrics.txt", import.meta.url),
+  "utf8",
+);
+
+const LIVE_FIXTURE = readFileSync(
+  new URL("./fixtures/live-vllm-metrics.txt", import.meta.url),
+  "utf8",
+);
+
+test("selectSamples reads the llama.cpp fixture", () => {
+  const series = parsePrometheusText(LLAMA_FIXTURE);
+  const result = selectSamples(series, { at: 5 });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.LlamaCpp);
+  assert.equal(result?.models.length, 1);
+  assert.equal(result?.models[0]?.modelName, null);
+  assert.deepEqual(result?.models[0]?.sample, {
+    at: 5,
+    generationTokens: 45678,
+    promptTokens: 123456,
+    prefixCacheHits: 0,
+    prefixCacheQueries: 0,
+    specAcceptedTokens: 600,
+    specDraftTokens: 800,
+    numRequestsRunning: 3,
+    numRequestsWaiting: 1,
+    kvCacheUsage: null,
+    decodeTokens: 45678,
+    decodeSeconds: 1522.6,
+    firstTokenSeconds: 0,
+    firstTokenCount: 0,
+  });
+});
+
+test("selectSamples ignores modelName on llama.cpp", () => {
+  const series = parsePrometheusText(LLAMA_FIXTURE);
+  const result = selectSamples(series, { at: 5, modelName: "anything" });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.LlamaCpp);
+  assert.equal(result?.models.length, 1);
+  assert.equal(result?.models[0]?.modelName, null);
+});
+
+const TWO_MODELS = [
+  'vllm:generation_tokens_total{engine="0",model_name="zeta"} 30',
+  'vllm:generation_tokens_total{engine="0",model_name="alpha"} 10',
+  'vllm:prompt_tokens_total{engine="0",model_name="alpha"} 7',
+  'vllm:generation_tokens_total{engine="1",model_name="alpha"} 5',
+].join("\n");
+
+test("selectSamples splits two vLLM models, sorted by name", () => {
+  const series = parsePrometheusText(TWO_MODELS);
+  const result = selectSamples(series, { at: 0 });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.Vllm);
+  assert.deepEqual(
+    result?.models.map((m) => m.modelName),
+    ["alpha", "zeta"],
+  );
+  const alpha = result?.models.find((m) => m.modelName === "alpha");
+  const zeta = result?.models.find((m) => m.modelName === "zeta");
+  assert.equal(alpha?.sample.generationTokens, 15);
+  assert.equal(alpha?.sample.promptTokens, 7);
+  assert.equal(zeta?.sample.generationTokens, 30);
+  assert.equal(zeta?.sample.promptTokens, 0);
+});
+
+test("selectSamples keeps only the filtered vLLM model", () => {
+  const series = parsePrometheusText(TWO_MODELS);
+  const zeta = selectSamples(series, { at: 0, modelName: "zeta" });
+  assert.notEqual(zeta, null);
+  assert.equal(zeta?.kind, ServerKind.Vllm);
+  assert.equal(zeta?.models.length, 1);
+  assert.equal(zeta?.models[0]?.modelName, "zeta");
+  const none = selectSamples(series, { at: 0, modelName: "none" });
+  assert.equal(none, null);
+});
+
+test("selectSamples on the live vLLM fixture equals selectSample", () => {
+  const series = parsePrometheusText(LIVE_FIXTURE);
+  const result = selectSamples(series, { at: 1_700_000_000_000 });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.Vllm);
+  assert.equal(result?.models.length, 1);
+  assert.equal(result?.models[0]?.modelName, "swift-1.5");
+  const single = selectSample(series, { at: 1_700_000_000_000, modelName: "swift-1.5" });
+  assert.deepEqual(result?.models[0]?.sample, single?.sample);
+});
+
+test("selectSamples is null for unrelated metrics", () => {
+  const series = parsePrometheusText("process_cpu_seconds_total 1.5");
+  assert.equal(selectSamples(series, { at: 0 }), null);
 });
