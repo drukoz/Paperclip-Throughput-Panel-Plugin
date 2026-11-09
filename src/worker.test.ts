@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-import { ServerStatus } from "./types.ts";
+import { ServerKind, ServerStatus } from "./types.ts";
+import type { ServerSnapshot, ServersSnapshot } from "./types.ts";
 import plugin, { resolveProbeSettings } from "./worker.ts";
 
 const METRICS_OK = [
@@ -67,16 +68,31 @@ function makeCtx(options: {
     ctx,
     handler: (key: string) => handlers.get(key),
     snapshot: async (): Promise<unknown> => {
-      const handler = handlers.get("throughput");
-      assert.ok(handler, "the worker must register a throughput data handler");
+      const handler = handlers.get("servers");
+      assert.ok(handler, "the worker must register a servers data handler");
       return handler({});
     },
   };
 }
 
+/** Reads `snapshot()` until the servers pass `predicate`, and returns the last read. */
+async function waitForServers(
+  snapshot: () => Promise<unknown>,
+  predicate: (servers: ServerSnapshot[]) => boolean,
+  timeoutMs = 2000,
+): Promise<ServersSnapshot> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const snap = (await snapshot()) as ServersSnapshot;
+    if (predicate(snap.servers)) return snap;
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for servers`);
+    await sleep(25);
+  }
+}
+
 test("a rejected fetch yields unreachable and the poll loop keeps running", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://reject.local/metrics", pollIntervalMs: 1000 },
+    config: { metricsUrl: "http://reject.local/metrics", server2MetricsUrl: "", pollIntervalMs: 1000 },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -87,9 +103,9 @@ test("a rejected fetch yields unreachable and the poll loop keeps running", asyn
   try {
     await plugin.definition.setup(ctx);
     await waitFor(() => calls.length >= 1, 2000);
-    const snap = (await snapshot()) as { status: number; error: string | null };
-    assert.equal(snap.status, ServerStatus.Unreachable);
-    assert.match(snap.error ?? "", /ECONNREFUSED/);
+    const server = (await snapshot() as ServersSnapshot).servers[0]!;
+    assert.equal(server.status, ServerStatus.Unreachable);
+    assert.match(server.error ?? "", /ECONNREFUSED/);
     // The rejection must not kill the interval: a second poll has to happen.
     await waitFor(() => calls.length >= 2, 5000);
     assert.ok(calls.length >= 2, "expected a second poll after the first failure");
@@ -101,7 +117,7 @@ test("a rejected fetch yields unreachable and the poll loop keeps running", asyn
 
 test("a non-200 response yields unreachable with the HTTP status in the error", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://notfound.local/metrics" },
+    config: { metricsUrl: "http://notfound.local/metrics", server2MetricsUrl: "" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -112,9 +128,9 @@ test("a non-200 response yields unreachable with the HTTP status in the error", 
   try {
     await plugin.definition.setup(ctx);
     await waitFor(() => calls.length >= 1, 2000);
-    const snap = (await snapshot()) as { status: number; error: string | null };
-    assert.equal(snap.status, ServerStatus.Unreachable);
-    assert.equal(snap.error, "HTTP 404 Not Found");
+    const server = (await snapshot() as ServersSnapshot).servers[0]!;
+    assert.equal(server.status, ServerStatus.Unreachable);
+    assert.equal(server.error, "HTTP 404 Not Found");
   } finally {
     globalThis.fetch = realFetch;
     await plugin.definition.onShutdown?.();
@@ -124,7 +140,7 @@ test("a non-200 response yields unreachable with the HTTP status in the error", 
 test("no token: the fetch carries no Authorization header", async () => {
   delete process.env.THROUGHPUT_METRICS_TOKEN;
   const { ctx } = makeCtx({
-    config: { metricsUrl: "http://notoken.local/metrics", modelName: "test-model" },
+    config: { metricsUrl: "http://notoken.local/metrics", server2MetricsUrl: "", modelName: "test-model" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -146,6 +162,7 @@ test("a literal authToken is sent as a Bearer header", async () => {
   const { ctx } = makeCtx({
     config: {
       metricsUrl: "http://littletoken.local/metrics",
+      server2MetricsUrl: "",
       modelName: "test-model",
       authToken: "literal-token",
     },
@@ -170,6 +187,7 @@ test("a secret_ref authToken is resolved and sent as a Bearer header", async () 
   const { ctx } = makeCtx({
     config: {
       metricsUrl: "http://secretref.local/metrics",
+      server2MetricsUrl: "",
       modelName: "test-model",
       // The real shape of EnvSecretRefBinding: `secretId`, not `ref`.
       authToken: { type: "secret_ref", secretId: "11111111-2222-3333-4444-555555555555" },
@@ -193,7 +211,7 @@ test("a secret_ref authToken is resolved and sent as a Bearer header", async () 
 
 test("a private/reserved-range rejection leaves the snapshot unreachable and does not throw", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://127.0.0.1:18081/metrics" },
+    config: { metricsUrl: "http://127.0.0.1:18081/metrics", server2MetricsUrl: "" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -207,13 +225,141 @@ test("a private/reserved-range rejection leaves the snapshot unreachable and doe
   try {
     await plugin.definition.setup(ctx);
     await waitFor(() => calls.length >= 1, 2000);
-    const snap = (await snapshot()) as { status: number; error: string | null };
-    assert.equal(snap.status, ServerStatus.Unreachable);
-    assert.match(snap.error ?? "", /private\/reserved ranges/);
+    const server = (await snapshot() as ServersSnapshot).servers[0]!;
+    assert.equal(server.status, ServerStatus.Unreachable);
+    assert.match(server.error ?? "", /private\/reserved ranges/);
   } finally {
     globalThis.fetch = realFetch;
     await plugin.definition.onShutdown?.();
   }
+});
+
+test("the default config polls hpcserver and the A9", async () => {
+  const { ctx, snapshot } = makeCtx({ config: {} });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(
+    () => new Response(METRICS_OK, { status: 200 }),
+    calls,
+  );
+  try {
+    await plugin.definition.setup(ctx);
+    await waitFor(
+      () =>
+        calls.some((c) => c.url === "http://127.0.0.1:18081/metrics") &&
+        calls.some((c) => c.url === "http://127.0.0.1:18082/metrics"),
+      2000,
+    );
+    const snap = (await snapshot()) as ServersSnapshot;
+    assert.deepEqual(
+      snap.servers.map((s) => s.slot),
+      [1, 2],
+    );
+    assert.deepEqual(
+      snap.servers.map((s) => s.label),
+      ["hpcserver", "A9 Mega"],
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("every model on a vLLM server is listed", async () => {
+  const metrics = `${METRICS_OK}\nvllm:generation_tokens_total{engine="0",model_name="other-model"} 5.0`;
+  const { ctx, snapshot } = makeCtx({
+    config: { metricsUrl: "http://twomodels.local/metrics", server2MetricsUrl: "" },
+  });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(
+    () => new Response(metrics, { status: 200 }),
+    calls,
+  );
+  try {
+    await plugin.definition.setup(ctx);
+    const snap = await waitForServers(snapshot, (servers) => (servers[0]?.models.length ?? 0) > 0);
+    assert.deepEqual(
+      snap.servers[0]!.models.map((m) => m.modelName),
+      ["other-model", "test-model"],
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("a llama.cpp server is read", async () => {
+  const { ctx, snapshot } = makeCtx({
+    config: { metricsUrl: "http://llama.local/metrics", server2MetricsUrl: "" },
+  });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub((url) => {
+    if (url.endsWith("/v1/models")) {
+      return new Response(JSON.stringify({ data: [{ id: "swift-1.5-a9" }] }), { status: 200 });
+    }
+    return new Response("llamacpp:tokens_predicted_total 10\nllamacpp:prompt_tokens_total 4", { status: 200 });
+  }, calls);
+  try {
+    await plugin.definition.setup(ctx);
+    const snap = await waitForServers(
+      snapshot,
+      (servers) => servers[0]?.models.some((m) => m.modelName !== null) ?? false,
+    );
+    assert.equal(snap.servers[0]!.kind, ServerKind.LlamaCpp);
+    assert.equal(snap.servers[0]!.models[0]!.modelName, "swift-1.5-a9");
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("server2Token as a secret is resolved with the company id", async () => {
+  const resolves: unknown[] = [];
+  const { ctx } = makeCtx({
+    config: { metricsUrl: "http://one.local/metrics", server2MetricsUrl: "" },
+    resolveSecret: async (_ref, options) => {
+      resolves.push(options);
+      return "resolved-secret";
+    },
+  });
+  const config = {
+    metricsUrl: "http://one.local/metrics",
+    server2MetricsUrl: "http://two.local/metrics",
+    server2Token: { type: "secret_ref", secretId: "22222222-3333-4444-5555-666666666666" },
+  };
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(
+    () => new Response(METRICS_OK, { status: 200 }),
+    calls,
+  );
+  try {
+    await plugin.definition.setup(ctx);
+    await plugin.definition.onConfigChanged!(config, { companyId: "company-1" });
+    await waitFor(() => calls.some((c) => c.url === "http://two.local/metrics"), 2000);
+    const two = calls.find((c) => c.url === "http://two.local/metrics")!;
+    assert.deepEqual(two.init?.headers, { Authorization: "Bearer resolved-secret" });
+    assert.ok(resolves.length >= 1, "expected server2Token to be resolved");
+    for (const options of resolves) {
+      assert.deepEqual(options, { companyId: "company-1" });
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("onValidateConfig accepts an empty server2MetricsUrl and rejects a bad server3MetricsUrl", async () => {
+  const good = await plugin.definition.onValidateConfig!({ server2MetricsUrl: "" });
+  assert.deepEqual(good, { ok: true });
+  const bad = await plugin.definition.onValidateConfig!({ server3MetricsUrl: "not a url" });
+  assert.equal(bad.ok, false);
+  assert.ok(
+    (bad.errors ?? []).includes('server3MetricsUrl is not a valid URL: "not a url"'),
+    "missing server3MetricsUrl error",
+  );
 });
 
 interface ProbeAccountState {

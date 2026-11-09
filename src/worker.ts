@@ -3,17 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-import { parsePrometheusText, selectSample } from "./metrics/parse.ts";
-import { ThroughputWindow } from "./metrics/rates.ts";
-import { buildSnapshot } from "./snapshot.ts";
-import type { ThroughputSnapshot } from "./types.ts";
+import { parsePrometheusText, selectSamples } from "./metrics/parse.ts";
+import { createServerPoller, resolveServers } from "./servers.ts";
+import type { ServerPoller } from "./servers.ts";
+import { ServerStatus } from "./types.ts";
+import type { ServersSnapshot } from "./types.ts";
 import { createProbeController } from "./usage/probe-controller.ts";
 import type { ProbeAccountSetting, ProbeController } from "./usage/probe-controller.ts";
 import { parseProbeOutput } from "./usage/probe-parse.ts";
 import { runProbe } from "./usage/probe-run.ts";
 
-const DEFAULT_METRICS_URL = "http://127.0.0.1:18081/metrics";
-const DEFAULT_MODEL_NAME = "swift-1.5";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 1000;
 const MAX_POLL_INTERVAL_MS = 60_000;
@@ -34,27 +33,16 @@ const PROBE_CONFIG_DIR = join(tmpdir(), "rukoz-throughput-panel", "claude-check"
  */
 const runOutsideInvocation = AsyncLocalStorage.snapshot();
 
-interface Settings {
-  metricsUrl: string;
-  /** Raw config value: a literal string, a `{ type: "secret_ref", ... }` object, or null. Never the resolved value. */
-  authToken: unknown;
-  modelName: string;
-  pollIntervalMs: number;
-}
-
 let ctxRef: PluginContext | null = null;
-let settings: Settings | null = null;
+let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
+let pollers: ServerPoller[] = [];
+/** JSON of the server settings the current pollers were built from. */
+let serverKey = "";
 let probeSettings: ProbeSettings = resolveProbeSettings(null);
 let probeController: ProbeController | null = null;
 /** The company whose settings the worker received last; the host resolves a plugin's secret only with it. */
 let probeCompanyId: string | null = null;
-let window = new ThroughputWindow();
-let lastError: string | null = null;
-let started = false;
-let modelName: string | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
-/** Bumped whenever `window` is replaced, so a poll in flight cannot write into the new window. */
-let windowGeneration = 0;
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -67,25 +55,13 @@ function clampPollInterval(ms: number): number {
   return Math.min(MAX_POLL_INTERVAL_MS, Math.max(MIN_POLL_INTERVAL_MS, ms));
 }
 
-function resolveSettings(config: Record<string, unknown> | null): Settings {
+function readPollInterval(config: Record<string, unknown> | null): number {
   const rawInterval = config?.pollIntervalMs;
-  return {
-    metricsUrl:
-      firstString(config?.metricsUrl, process.env.THROUGHPUT_METRICS_URL) ??
-      DEFAULT_METRICS_URL,
-    authToken:
-      config?.authToken !== undefined && config.authToken !== null
-        ? config.authToken
-        : (firstString(process.env.THROUGHPUT_METRICS_TOKEN) ?? null),
-    modelName:
-      firstString(config?.modelName, process.env.THROUGHPUT_MODEL_NAME) ??
-      DEFAULT_MODEL_NAME,
-    pollIntervalMs: clampPollInterval(
-      typeof rawInterval === "number" && Number.isFinite(rawInterval)
-        ? rawInterval
-        : DEFAULT_POLL_INTERVAL_MS,
-    ),
-  };
+  return clampPollInterval(
+    typeof rawInterval === "number" && Number.isFinite(rawInterval)
+      ? rawInterval
+      : DEFAULT_POLL_INTERVAL_MS,
+  );
 }
 
 /** The Claude check settings: the configured accounts, the CLI path and the interval. */
@@ -147,58 +123,37 @@ async function resolveToken(ctx: PluginContext, raw: unknown, companyId: string 
   return null;
 }
 
-async function poll(ctx: PluginContext): Promise<void> {
-  const active = settings;
-  if (active === null) return;
-  const generation = windowGeneration;
-  try {
-    const token = await resolveToken(ctx, active.authToken);
-    // The host's ctx.http.fetch applies an SSRF guard that rejects every
-    // loopback and RFC1918 address, and the vLLM metrics endpoint is only
-    // reachable on the host's loopback interface, so the guard can never be
-    // satisfied here. The worker is an ordinary host process, so we scrape the
-    // endpoint with Node's global fetch instead. This is deliberate: the target
-    // is operator-configured and local, and nothing from the response is
-    // echoed back to a caller.
-    const res = await fetch(active.metricsUrl, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(Math.min(4000, active.pollIntervalMs - 500)),
-    });
-    if (generation !== windowGeneration) return;
-    if (!res.ok) {
-      lastError = `HTTP ${res.status} ${res.statusText}`;
-      return;
-    }
-    const series = parsePrometheusText(await res.text());
-    const picked = selectSample(series, {
-      at: Date.now(),
-      modelName: active.modelName,
-    });
-    // The config changed while this scrape was in flight: it describes the old
-    // server, so discard it rather than seeding the new window with stale data.
-    if (generation !== windowGeneration) return;
-    if (picked === null) {
-      lastError = `no vllm metrics for model "${active.modelName}" at ${active.metricsUrl}`;
-      return;
-    }
-    window.push(picked.sample);
-    modelName = picked.modelName;
-    lastError = null;
-  } catch (err) {
-    if (generation !== windowGeneration) return;
-    lastError = err instanceof Error ? err.message : String(err);
-    ctx.logger.warn(`throughput poll failed: ${lastError}`);
-  } finally {
-    if (generation === windowGeneration) started = true;
-  }
+/** Replace every poller when the server settings changed; keep them (and their history) otherwise. */
+function configureServers(ctx: PluginContext, config: Record<string, unknown> | null): void {
+  const servers = resolveServers(config);
+  const key = JSON.stringify(servers);
+  if (key === serverKey && pollers.length > 0) return;
+  serverKey = key;
+  for (const p of pollers) p.dispose();
+  pollers = servers.map((setting) =>
+    createServerPoller(setting, {
+      // The host's ctx.http.fetch applies an SSRF guard that rejects every
+      // loopback and RFC1918 address, and the metrics endpoints are only
+      // reachable on the host's loopback interface, so the guard can never be
+      // satisfied here. The worker is an ordinary host process, so we scrape
+      // the endpoints with Node's global fetch instead. This is deliberate:
+      // the targets are operator-configured and local, and nothing from the
+      // responses is echoed back to a caller.
+      fetch: (url, init) => fetch(url, init),
+      resolveToken: (raw) => resolveToken(ctx, raw, probeCompanyId),
+      select: (text, options) => selectSamples(parsePrometheusText(text), options),
+      now: () => Date.now(),
+      timeoutMs: Math.min(4000, pollIntervalMs - 500),
+    }),
+  );
 }
 
 function startPolling(ctx: PluginContext): void {
   if (timer !== null) clearInterval(timer);
-  void poll(ctx);
+  for (const p of pollers) void p.poll();
   timer = setInterval(() => {
-    void poll(ctx);
-  }, settings?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+    for (const p of pollers) void p.poll();
+  }, pollIntervalMs);
 }
 
 const plugin = definePlugin({
@@ -215,17 +170,21 @@ const plugin = definePlugin({
         }`,
       );
     }
-    settings = resolveSettings(config);
+    pollIntervalMs = readPollInterval(config);
+    configureServers(ctx, config);
 
     ctx.logger.info("throughput panel worker starting", {
-      metricsUrl: settings.metricsUrl,
-      modelName: settings.modelName,
-      pollIntervalMs: settings.pollIntervalMs,
+      servers: pollers.map((p) => ({
+        slot: p.setting.slot,
+        label: p.setting.label,
+        metricsUrl: p.setting.metricsUrl,
+      })),
+      pollIntervalMs,
     });
 
-    ctx.data.register("throughput", async (): Promise<ThroughputSnapshot> =>
-      buildSnapshot({ window, lastError, started, modelName }),
-    );
+    ctx.data.register("servers", async (): Promise<ServersSnapshot> => ({
+      servers: pollers.map((p) => p.snapshot()),
+    }));
 
     probeSettings = resolveProbeSettings(config);
     const controller = createProbeController({
@@ -255,26 +214,18 @@ const plugin = definePlugin({
     if (ctxRef === null) return;
     try {
       probeCompanyId = context?.companyId ?? probeCompanyId;
-      const previous = settings;
-      settings = resolveSettings(newConfig);
-      if (
-        previous === null ||
-        settings.metricsUrl !== previous.metricsUrl ||
-        settings.modelName !== previous.modelName
-      ) {
-        window = new ThroughputWindow();
-        windowGeneration += 1;
-        modelName = null;
-        lastError = null;
-        started = false;
-      }
+      pollIntervalMs = readPollInterval(newConfig);
+      configureServers(ctxRef, newConfig);
       startPolling(ctxRef);
       probeSettings = resolveProbeSettings(newConfig);
       probeController?.configure(probeSettings.accounts, probeSettings.intervalMinutes);
       ctxRef.logger.info("throughput panel config reloaded", {
-        metricsUrl: settings.metricsUrl,
-        modelName: settings.modelName,
-        pollIntervalMs: settings.pollIntervalMs,
+        servers: pollers.map((p) => ({
+          slot: p.setting.slot,
+          label: p.setting.label,
+          metricsUrl: p.setting.metricsUrl,
+        })),
+        pollIntervalMs,
       });
     } catch (err) {
       ctxRef.logger.warn(
@@ -288,20 +239,29 @@ const plugin = definePlugin({
   async onShutdown() {
     if (timer !== null) clearInterval(timer);
     timer = null;
+    for (const p of pollers) p.dispose();
+    pollers = [];
+    serverKey = "";
   },
 
   async onHealth() {
+    const snapshots = pollers.map((p) => p.snapshot());
     const details: Record<string, unknown> = {
-      metricsUrl: settings?.metricsUrl ?? null,
-      modelName,
-      sampleCount: window.size(),
+      servers: snapshots.map((s) => ({
+        slot: s.slot,
+        label: s.label,
+        status: s.status,
+        models: s.models.length,
+        error: s.error,
+      })),
       claudeAccounts: probeSettings.accounts.length,
     };
-    if (!started) {
+    if (snapshots.every((s) => s.status === ServerStatus.Starting)) {
       return { status: "ok", message: "starting", details };
     }
-    if (lastError !== null) {
-      return { status: "degraded", message: lastError, details };
+    const firstError = snapshots.find((s) => s.error !== null)?.error ?? null;
+    if (firstError !== null) {
+      return { status: "degraded", message: firstError, details };
     }
     return { status: "ok", message: "metrics streaming", details };
   },
@@ -309,15 +269,25 @@ const plugin = definePlugin({
   async onValidateConfig(config) {
     const errors: string[] = [];
 
-    const url = config.metricsUrl;
-    if (typeof url === "string") {
+    for (const key of ["metricsUrl", "server2MetricsUrl", "server3MetricsUrl"] as const) {
+      const url = config[key];
+      if (typeof url !== "string") continue;
+      // An empty string means "this server is off", and is only allowed for slots 2 and 3.
+      if (url === "" && key !== "metricsUrl") continue;
       try {
         const parsed = new URL(url);
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-          errors.push(`metricsUrl must be an http: or https: URL, got "${url}"`);
+          errors.push(`${key} must be an http: or https: URL, got "${url}"`);
         }
       } catch {
-        errors.push(`metricsUrl is not a valid URL: "${url}"`);
+        errors.push(`${key} is not a valid URL: "${url}"`);
+      }
+    }
+
+    for (const key of ["authToken", "server2Token", "server3Token"] as const) {
+      const token = config[key];
+      if (token !== undefined && token !== null && typeof token !== "string" && !isSecretRef(token)) {
+        errors.push(`${key} must be a token string or a secret reference`);
       }
     }
 
