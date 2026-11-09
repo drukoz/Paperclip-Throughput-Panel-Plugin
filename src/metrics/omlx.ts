@@ -173,7 +173,7 @@ export class OmlxCounters {
   private counters: Map<string, ModelCounters> = new Map();
   private requests: Map<string, RequestState> = new Map();
   // Session-total baseline: completion tokens at the last rebase, and the
-  // completion/prompt totals last seen. Both null until the first status.
+  // completion total last seen. Both null until the first status.
   private baseCompletion: number | null = null;
   private lastCompletion: number | null = null;
   // Completion tokens of requests we saw live that have since finished, and the
