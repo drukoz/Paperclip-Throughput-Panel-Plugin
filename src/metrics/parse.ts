@@ -1,4 +1,5 @@
-import type { MetricsSample } from "../types.ts";
+import type { MetricsSample, ModelSample, SelectedSamples } from "../types.ts";
+import { ServerKind } from "../types.ts";
 
 /** One series line from a Prometheus text exposition response. */
 export interface PromSeries {
@@ -164,16 +165,8 @@ function parseValue(s: string): number | null {
   return null;
 }
 
-/** Pick the vLLM series we need and assemble one sample. Returns null if the required generation counter is absent. */
-export function selectSample(
-  series: PromSeries[],
-  options: { at: number; modelName?: string },
-): { sample: MetricsSample; modelName: string | null } | null {
-  const filtered = series.filter((s) => {
-    if (options.modelName === undefined) return true;
-    return s.labels.model_name === options.modelName;
-  });
-
+/** Assemble one vLLM sample from an already-model-filtered series set. Null when the generation counter is absent. */
+function vllmSample(filtered: PromSeries[], at: number): ModelSample | null {
   const genSeries = filtered.filter(
     (s) => s.name === "vllm:generation_tokens_total" && Number.isFinite(s.value),
   );
@@ -188,15 +181,15 @@ export function selectSample(
       .filter((s) => s.name === name && Number.isFinite(s.value))
       .reduce((sum, s) => sum + s.value, 0);
 
-  const maxMetric = (name: string): number => {
+  const maxOrNull = (name: string): number | null => {
     const values = filtered
       .filter((s) => s.name === name && Number.isFinite(s.value))
       .map((s) => s.value);
-    return values.length > 0 ? Math.max(...values) : 0;
+    return values.length > 0 ? Math.max(...values) : null;
   };
 
   const sample: MetricsSample = {
-    at: options.at,
+    at,
     generationTokens,
     promptTokens: sumMetric("vllm:prompt_tokens_total"),
     prefixCacheHits: sumMetric("vllm:prefix_cache_hits_total"),
@@ -205,8 +198,102 @@ export function selectSample(
     specDraftTokens: sumMetric("vllm:spec_decode_num_draft_tokens_total"),
     numRequestsRunning: sumMetric("vllm:num_requests_running"),
     numRequestsWaiting: sumMetric("vllm:num_requests_waiting"),
-    kvCacheUsage: maxMetric("vllm:kv_cache_usage_perc"),
+    kvCacheUsage: maxOrNull("vllm:kv_cache_usage_perc"),
+    decodeTokens: sumMetric("vllm:inter_token_latency_seconds_count"),
+    decodeSeconds: sumMetric("vllm:inter_token_latency_seconds_sum"),
+    firstTokenSeconds: sumMetric("vllm:time_to_first_token_seconds_sum"),
+    firstTokenCount: sumMetric("vllm:time_to_first_token_seconds_count"),
   };
 
   return { sample, modelName };
+}
+
+/** Pick the vLLM series we need and assemble one sample. Returns null if the required generation counter is absent. */
+export function selectSample(
+  series: PromSeries[],
+  options: { at: number; modelName?: string },
+): { sample: MetricsSample; modelName: string | null } | null {
+  const filtered = series.filter((s) => {
+    if (options.modelName === undefined) return true;
+    return s.labels.model_name === options.modelName;
+  });
+  const m = vllmSample(filtered, options.at);
+  return m === null ? null : { sample: m.sample, modelName: m.modelName };
+}
+
+/** Assemble the single llama.cpp sample. Its metrics carry no labels, so every name is summed over all series. */
+function llamaCppSample(series: PromSeries[], at: number): MetricsSample {
+  const sum = (name: string): number =>
+    series
+      .filter((s) => s.name === name && Number.isFinite(s.value))
+      .reduce((total, s) => total + s.value, 0);
+
+  return {
+    at,
+    generationTokens: sum("llamacpp:tokens_predicted_total"),
+    promptTokens: sum("llamacpp:prompt_tokens_total"),
+    prefixCacheHits: 0,
+    prefixCacheQueries: 0,
+    specAcceptedTokens: sum("llamacpp:spec_decode_num_accepted_tokens_total"),
+    specDraftTokens: sum("llamacpp:spec_decode_num_draft_tokens_total"),
+    numRequestsRunning: sum("llamacpp:requests_processing"),
+    numRequestsWaiting: sum("llamacpp:requests_deferred"),
+    kvCacheUsage: null,
+    decodeTokens: sum("llamacpp:tokens_predicted_total"),
+    decodeSeconds: sum("llamacpp:tokens_predicted_seconds_total"),
+    firstTokenSeconds: 0,
+    firstTokenCount: 0,
+  };
+}
+
+/**
+ * Every model in one scrape. vLLM: one entry per distinct `model_name` label that has a
+ * finite `vllm:generation_tokens_total`, sorted by name (series without the label form one
+ * entry with modelName null, sorted first); `modelName` keeps only that model. llama.cpp:
+ * one entry with modelName null; `modelName` is ignored (its metrics carry no labels).
+ * Null when the scrape has neither `vllm:generation_tokens_total` nor
+ * `llamacpp:tokens_predicted_total`.
+ */
+export function selectSamples(
+  series: PromSeries[],
+  options: { at: number; modelName?: string },
+): SelectedSamples | null {
+  if (series.some((s) => s.name === "vllm:generation_tokens_total")) {
+    const filtered = series.filter((s) => {
+      if (options.modelName === undefined) return true;
+      return s.labels.model_name === options.modelName;
+    });
+
+    const groups = new Map<string | undefined, PromSeries[]>();
+    for (const s of filtered) {
+      const key = s.labels.model_name;
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, [s]);
+      else group.push(s);
+    }
+
+    const models: ModelSample[] = [];
+    for (const group of groups.values()) {
+      const m = vllmSample(group, options.at);
+      if (m !== null) models.push(m);
+    }
+    if (models.length === 0) return null;
+
+    models.sort((a, b) => {
+      if (a.modelName === null) return b.modelName === null ? 0 : -1;
+      if (b.modelName === null) return 1;
+      return a.modelName < b.modelName ? -1 : a.modelName > b.modelName ? 1 : 0;
+    });
+
+    return { kind: ServerKind.Vllm, models };
+  }
+
+  if (series.some((s) => s.name === "llamacpp:tokens_predicted_total")) {
+    return {
+      kind: ServerKind.LlamaCpp,
+      models: [{ modelName: null, sample: llamaCppSample(series, options.at) }],
+    };
+  }
+
+  return null;
 }

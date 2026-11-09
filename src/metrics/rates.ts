@@ -13,7 +13,13 @@ const COUNTER_FIELDS = [
   "prefixCacheQueries",
   "specAcceptedTokens",
   "specDraftTokens",
+  "decodeTokens",
+  "decodeSeconds",
+  "firstTokenSeconds",
+  "firstTokenCount",
 ] as const;
+
+export type CounterField = (typeof COUNTER_FIELDS)[number];
 
 function rateBetween(a: MetricsSample, b: MetricsSample): RatePair | null {
   const dt = (b.at - a.at) / 1000;
@@ -125,6 +131,31 @@ export class ThroughputWindow {
       generation: generationSeconds > 0 ? generationTokens / generationSeconds : 0,
       prompt: promptSeconds > 0 ? promptTokens / promptSeconds : 0,
     };
+  }
+
+  /**
+   * Δnumerator / Δdenominator between the first sample inside the trailing `windowMs`
+   * and the newest one (when only the newest is inside, the one before it). Null with
+   * fewer than two samples or when Δdenominator <= 0.
+   */
+  ratioOver(windowMs: number, numerator: CounterField, denominator: CounterField): number | null {
+    const n = this.samples.length;
+    if (n < 2) return null;
+    const newest = this.samples[n - 1]!;
+    const cutoff = newest.at - windowMs;
+
+    let first = n - 2;
+    for (let i = 0; i < n - 1; i++) {
+      if (this.samples[i]!.at >= cutoff) {
+        first = i;
+        break;
+      }
+    }
+    const base = this.samples[first]!;
+
+    const dDen = newest[denominator] - base[denominator];
+    if (dDen <= 0) return null;
+    return Math.max(0, newest[numerator] - base[numerator]) / dDen;
   }
 
   cumulativeRates(): {
