@@ -167,7 +167,7 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
             const data = typeof body === "object" && body !== null ? (body as { data?: unknown }).data : undefined;
             const first = Array.isArray(data) && data.length > 0 ? data[0] : undefined;
             const id = typeof first === "object" && first !== null ? (first as { id?: unknown }).id : undefined;
-            if (typeof id === "string" && id !== "") llamaName = id;
+            if (!disposed && typeof id === "string" && id !== "") llamaName = id;
           }
         } catch {
           /* the name is optional */
