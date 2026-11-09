@@ -56,6 +56,8 @@ export function kindLabel(kind: ServerKind): string {
       return "vLLM";
     case ServerKind.LlamaCpp:
       return "llama.cpp";
+    case ServerKind.Omlx:
+      return "oMLX";
     default:
       return "";
   }
