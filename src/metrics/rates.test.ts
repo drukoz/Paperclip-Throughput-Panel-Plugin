@@ -311,3 +311,46 @@ test("rates clamp at zero when only gauges move", () => {
   assert.equal(rates.generation, 0);
   assert.equal(rates.prompt, 0);
 });
+
+test("ratioOver is null with one sample", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 100, decodeSeconds: 4 }));
+  assert.equal(w.ratioOver(60_000, "decodeTokens", "decodeSeconds"), null);
+});
+
+test("ratioOver divides counter deltas over the window", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 0, decodeSeconds: 0 }));
+  w.push(sample(5000, { decodeTokens: 100, decodeSeconds: 4 }));
+  w.push(sample(10000, { decodeTokens: 300, decodeSeconds: 12 }));
+  assert.equal(w.ratioOver(60_000, "decodeTokens", "decodeSeconds"), 25);
+});
+
+test("ratioOver starts at the first sample inside the window", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 0, decodeSeconds: 0 }));
+  w.push(sample(50_000, { decodeTokens: 1000, decodeSeconds: 10 }));
+  w.push(sample(70_000, { decodeTokens: 1200, decodeSeconds: 20 }));
+  assert.equal(w.ratioOver(30_000, "decodeTokens", "decodeSeconds"), 20);
+});
+
+test("ratioOver uses the previous sample when only the newest is inside", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 0, decodeSeconds: 0 }));
+  w.push(sample(100_000, { decodeTokens: 500, decodeSeconds: 25 }));
+  assert.equal(w.ratioOver(10_000, "decodeTokens", "decodeSeconds"), 20);
+});
+
+test("ratioOver is null when the denominator did not move", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 0, decodeSeconds: 5 }));
+  w.push(sample(5000, { decodeTokens: 50, decodeSeconds: 5 }));
+  assert.equal(w.ratioOver(60_000, "decodeTokens", "decodeSeconds"), null);
+});
+
+test("a decodeTokens drop resets the window", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 100 }));
+  w.push(sample(5000, { decodeTokens: 10 }));
+  assert.equal(w.size(), 1);
+});

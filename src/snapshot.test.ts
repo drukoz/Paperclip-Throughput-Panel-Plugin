@@ -211,3 +211,59 @@ test("averages stay null when the status is not ok", () => {
   assert.equal(unreachable.status, ServerStatus.Unreachable);
   assert.deepEqual(unreachable.averages, { "1m": null, "5m": null, "15m": null });
 });
+
+test("perRequestTokensPerSec and timeToFirstTokenMs fill every window when ok", () => {
+  const w = new ThroughputWindow();
+  w.push(
+    sample(0, { decodeTokens: 0, decodeSeconds: 0, firstTokenSeconds: 0, firstTokenCount: 0 }),
+  );
+  w.push(
+    sample(5000, {
+      decodeTokens: 150,
+      decodeSeconds: 10,
+      firstTokenSeconds: 1.5,
+      firstTokenCount: 3,
+    }),
+  );
+  const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
+  for (const key of ["1m", "5m", "15m"] as const) {
+    assert.equal(snap.perRequestTokensPerSec[key], 15);
+    assert.equal(snap.timeToFirstTokenMs[key], 500);
+  }
+});
+
+test("timeToFirstTokenMs is null on a server without the metric", () => {
+  const w = new ThroughputWindow();
+  w.push(sample(0, { decodeTokens: 0, decodeSeconds: 0 }));
+  w.push(sample(5000, { decodeTokens: 150, decodeSeconds: 10 }));
+  const snap = buildSnapshot({ window: w, lastError: null, started: true, modelName: null });
+  for (const key of ["1m", "5m", "15m"] as const) {
+    assert.equal(snap.perRequestTokensPerSec[key], 15);
+    assert.equal(snap.timeToFirstTokenMs[key], null);
+  }
+});
+
+test("the new records stay null when the status is not ok", () => {
+  const w = new ThroughputWindow();
+  w.push(
+    sample(0, { decodeTokens: 0, decodeSeconds: 0, firstTokenSeconds: 0, firstTokenCount: 0 }),
+  );
+  w.push(
+    sample(5000, {
+      decodeTokens: 150,
+      decodeSeconds: 10,
+      firstTokenSeconds: 1.5,
+      firstTokenCount: 3,
+    }),
+  );
+  const snap = buildSnapshot({
+    window: w,
+    lastError: "boom",
+    started: true,
+    modelName: null,
+  });
+  for (const key of ["1m", "5m", "15m"] as const) {
+    assert.equal(snap.perRequestTokensPerSec[key], null);
+    assert.equal(snap.timeToFirstTokenMs[key], null);
+  }
+});

@@ -59,6 +59,10 @@ export function buildSnapshot(input: SnapshotInput): ThroughputSnapshot {
     snapshot.instant = window.instantRates();
     for (const key of AVERAGE_WINDOW_KEYS) {
       snapshot.averages[key] = window.averageRates(AVERAGE_WINDOW_MS[key]);
+      const ms = AVERAGE_WINDOW_MS[key];
+      snapshot.perRequestTokensPerSec[key] = window.ratioOver(ms, "decodeTokens", "decodeSeconds");
+      const ttft = window.ratioOver(ms, "firstTokenSeconds", "firstTokenCount");
+      snapshot.timeToFirstTokenMs[key] = ttft === null ? null : ttft * 1000;
     }
     snapshot.numRequestsRunning = latest.numRequestsRunning;
     snapshot.numRequestsWaiting = latest.numRequestsWaiting;
