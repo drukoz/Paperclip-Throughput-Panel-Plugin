@@ -44,3 +44,22 @@ test("manifest declares the Claude check settings", () => {
   assert.equal(properties?.claudeCheckMinutes?.minimum, 5);
   assert.equal(properties?.claudeCheckMinutes?.maximum, 120);
 });
+
+test("manifest declares three model servers", () => {
+  const properties = manifest.instanceConfigSchema?.properties as
+    | Record<string, { type?: string; format?: string; default?: string }>
+    | undefined;
+  assert.equal(properties?.server1Label?.default, "hpcserver");
+  assert.equal(properties?.server2Label?.default, "A9 Mega");
+  assert.equal(properties?.server2MetricsUrl?.default, "http://127.0.0.1:18082/metrics");
+  assert.equal(properties?.server3MetricsUrl?.default, undefined);
+  // The token fields are secret fields: the settings page shows their picker only for
+  // this format, and the host's Ajv check rejects the stored { type: "secret_ref" }
+  // object under type "string".
+  for (const key of ["authToken", "server2Token", "server3Token"]) {
+    assert.equal(properties?.[key]?.format, "secret-ref");
+    assert.equal(properties?.[key]?.type, undefined);
+  }
+  // Blank model filter means every model, so the field has no default.
+  assert.equal(properties?.modelName?.default, undefined);
+});

@@ -4,7 +4,7 @@
 
 A Paperclip plugin, id `rukoz.throughput-panel`, that puts a small floating panel in the bottom-right corner of every signed-in Paperclip page. The panel shows:
 
-- the live tokens/sec of the company's local model server (vLLM serving `swift-1.5` on hpcserver), read by the plugin worker;
+- the live tokens/sec of every model on each configured model server (up to three: hpcserver's vLLM at `127.0.0.1:18081`, the A9 Mega at `127.0.0.1:18082`, an optional third), read by the plugin worker; per model: tok/s, window average, per-request tok/s, TTFT, requests, caches;
 - the Claude plan usage (5-hour session, weekly, weekly Fable) of the user's Claude accounts, from one of two sources:
   - from RUK-518 on, when Claude accounts are set in the plugin settings: one "Claude · <label>" section per account. The worker runs a tiny Claude Code request for each account (the "check", in `src/usage/probe-*.ts`) and reads the `rate_limit_event` Claude Code prints. Only while the panel is expanded, at most every `claudeCheckMinutes` per account.
   - otherwise (RUK-249): one "Claude plan" section for the signed-in user's default Claude subscription, read by the panel itself from Paperclip's API: the `rate_limit_event` lines in `claude_local` agent run logs, plus Anthropic's usage check through Paperclip's AI-connection usage route.
@@ -16,7 +16,8 @@ Its one user is the board operator who owns this Paperclip instance and watches 
 
 - Paperclip runs on this Mac as the launchd service `ing.paperclip.paperclipai`. The service runs `~/.local/bin/paperclipai run --instance default`, a shim for the managed install at `~/.paperclip/cli/current`. Since 2026-10-30 that is 2026.1029.0-nightly.1, moved there at the user's request (it was 2026.1023.0). The user's launchd job `com.drukoz.paperclip-local-patches` re-applies local patches to the installed Paperclip every 30 minutes and may restart it.
 - The plugin is installed from a local path: this repository's managed checkout, `~/.paperclip/instances/default/projects/f5895970-0d60-4783-9d98-ee75e99a924b/beea1c91-3d42-4a92-b871-27082af1144e/_default`. The host runs `dist/worker.js` in a worker process and serves `dist/ui/` to the browser at `/_plugins/rukoz.throughput-panel/ui/`.
-- The worker scrapes `http://127.0.0.1:18081/metrics`, a tunnel to hpcserver. The browser cannot reach that address, which is why the worker scrapes it.
+- The worker scrapes each enabled server on this Mac's loopback (the browser cannot reach it): server 1 `http://127.0.0.1:18081/metrics` (ssh tunnel `com.drukoz.llm-metrics-tunnel` to hpcserver's vLLM, no key); server 2 the A9 Mega `http://127.0.0.1:18082/metrics` (launchd forwarder `com.drukoz.llm-forward-a9` → `192.168.1.81:8081`, behind Caddy, needs `Authorization: Bearer <key>` from `server2Token`).
+- The panel reads vLLM and llama.cpp metrics, told apart by their metric names (`vllm:…` / `llamacpp:…`); the A9 runs llama.cpp, whose `/metrics` exists only with `--metrics`.
 - The host starts the worker with a minimal environment (`PATH`, `NODE_PATH`, `PAPERCLIP_PLUGIN_ID`, `NODE_ENV`, `TZ`; no `HOME`). Anything the worker spawns gets an absolute executable path and an explicit environment.
 - The Claude check spawns the Claude Code CLI, `/opt/homebrew/bin/claude` by default (setting `claudePath`), with the account's token in `CLAUDE_CODE_OAUTH_TOKEN` and a private folder as `HOME` and `CLAUDE_CONFIG_DIR` (`/tmp/rukoz-throughput-panel/claude-check`: no `TMPDIR`, so `os.tmpdir()` is `/tmp`).
 - Plugin settings are per company on this host. The worker starts with an empty config, and `ctx.config.get()` without a company id fails in `setup`; the host then replays each company's saved settings through `onConfigChanged(config, { companyId })`, so that is where the worker learns them.
@@ -28,6 +29,7 @@ Its one user is the board operator who owns this Paperclip instance and watches 
 ```
 src/manifest.ts        plugin manifest: id, capabilities, config schema, the appShellOverlay slot
 src/worker.ts          worker: config resolution, poll loop, the "throughput" data handler
+src/servers.ts         per-server settings and poller (RUK-869)
 src/snapshot.ts        builds the ThroughputSnapshot the UI reads
 src/types.ts           worker-to-UI contract (MetricsSample, ThroughputSnapshot, ...)
 src/windows.ts         the 1m / 5m / 15m average windows
@@ -96,3 +98,4 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 - For a Paperclip sign-in (`claude setup-token`) the AI-connection usage route always answers 403 `permission_denied` (paperclipai/paperclip#18911): the check is the only source for those accounts.
 - The `/api/plugins` routes need a board instance-admin credential; an agent key gets `403`. Do not loop on them.
 - Never commit a token, key or secret value, including in test fixtures.
+- The A9 Mega's key is a Paperclip secret picked in the settings (`server2Token`); never log it, put it in an error message, a fixture or a test.

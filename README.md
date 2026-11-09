@@ -2,18 +2,22 @@
 
 ## What it is
 
-A Paperclip plugin that shows a live tokens/sec readout for the local vLLM model server, as a small floating panel in the Paperclip UI. It polls the server's Prometheus metrics endpoint from a worker on the Paperclip host and renders generation and prompt throughput, request counts, cache stats, and a generation tok/s graph over a selectable window. The plugin id is `rukoz.throughput-panel`.
+A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM or llama.cpp — as a small floating panel in the Paperclip UI. A worker on the Paperclip host polls every configured server's Prometheus metrics endpoint and tells the two metrics formats apart by their metric names (`vllm:…` / `llamacpp:…`). The plugin id is `rukoz.throughput-panel`.
 
-The panel shows:
+The panel has one section per configured server, headed by the server's label, and inside it one block per model the server reports. The collapsed pill shows the total generation tok/s summed across every server.
+
+Each model block shows:
 
 - Generation and prompt tok/s, with an average over a selectable window (1m / 5m / 15m) that counts only the time the server was producing tokens
+- Per-request tok/s — the speed a single agent sees while decoding (decode tokens divided by decode time)
+- Time to first token (TTFT), the mean over requests in the window (vLLM only)
 - Requests running and waiting
-- KV cache usage
-- Prefix-cache hit rate
-- MTP (speculative decoding) acceptance rate
+- KV cache usage (vLLM only)
+- Prefix-cache hit rate (vLLM only)
+- MTP / draft (speculative decoding) acceptance rate
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`
-- An explicit "Model server unreachable" state when the endpoint cannot be reached
+- An explicit unreachable state, per server, when that server's endpoint cannot be reached
 - Claude plan usage for your default Claude subscription: how much of the current 5-hour session, the weekly limit and the weekly Fable limit is used, with the reset time on hover
 
 ## How it works
@@ -85,16 +89,25 @@ Configuration is company-scoped. There are two ways to set it:
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `metricsUrl` | string | `http://127.0.0.1:18081/metrics` | Prometheus metrics endpoint of the vLLM server. |
-| `authToken` | string | *(none)* | Optional. Sent as `Authorization: Bearer <token>`. Prefer a secret reference over a literal value. |
-| `modelName` | string | `swift-1.5` | Value of the `model_name` label to read. |
+| `server1Label` | string | `hpcserver` | Server 1's label, shown in the panel. |
+| `metricsUrl` | string | `http://127.0.0.1:18081/metrics` | Server 1's Prometheus `/metrics` endpoint (vLLM or llama.cpp). |
+| `authToken` | secret | *(none)* | Server 1's optional bearer token, sent as `Authorization: Bearer <token>`. hpcserver needs none. |
+| `modelName` | string | *(none)* | Server 1's model filter: show only this `model_name`. Blank shows every model the server serves. |
+| `server2Label` | string | `A9 Mega` | Server 2's label, shown in the panel. |
+| `server2MetricsUrl` | string | `http://127.0.0.1:18082/metrics` | Server 2's Prometheus `/metrics` endpoint — the A9 Mega (Strix Halo). Save it empty to hide this server. |
+| `server2Token` | secret | *(none)* | Server 2's bearer token. The A9 Mega answers 401 without it. |
+| `server3Label` | string | `Server 3` | Server 3's label, shown in the panel. |
+| `server3MetricsUrl` | string | *(none)* | Server 3's Prometheus `/metrics` endpoint. Optional; leave empty to hide this server. |
+| `server3Token` | secret | *(none)* | Server 3's optional bearer token. |
 | `pollIntervalMs` | number | `5000` | Poll interval in milliseconds; minimum 1000, clamped to 60000. |
 | `claudeAccount1Label` … `claudeAccount3Label` | string | *(none)* | Shown in the panel as "Claude · <label>"; blank means "Account <n>". |
 | `claudeAccount1Token` … `claudeAccount3Token` | secret | *(none)* | A Claude Code token for that account, from `claude setup-token`, stored as a Paperclip secret. A slot without a token is ignored. A raw value pasted instead stays in these settings as plain text. |
 | `claudePath` | string | `/opt/homebrew/bin/claude` | Absolute path of the Claude Code CLI the checks run. |
 | `claudeCheckMinutes` | number | `15` | Minutes between checks of one account; 5 to 120. |
 
-The current endpoint answers with HTTP 200 and no `Authorization` header, so the token is optional — the plugin sends one only when configured.
+A server slot is enabled when its metrics URL, after defaults, is a non-blank string: server 1 is always on; server 2 is on unless `server2MetricsUrl` is saved as an empty string; server 3 is on only when `server3MetricsUrl` is set.
+
+The current hpcserver endpoint answers with HTTP 200 and no `Authorization` header, so `authToken` is optional — the plugin sends a token to a server only when that server has one configured. The A9 Mega is behind Caddy, which answers 401 to every request without `Authorization: Bearer <key>`, so `server2Token` is required there.
 
 ### The token
 
@@ -107,6 +120,8 @@ For the config route, the `authToken` value may be either a literal string or a 
 ```
 
 The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.**
+
+Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. To set the A9 Mega's key, open the plugin settings and, under **Server 2: token**, pick the secret that the "A9 Mega local endpoint" AI connection uses (or press **+** to store the key as a new secret). Until you do, that server's section shows `HTTP 401 … set this server's token`.
 
 ### Claude accounts
 
@@ -134,7 +149,7 @@ The worker resolves each token for one check, passes it only to that Claude Code
 
 ### Environment variables (dev server only)
 
-The worker reads these variables:
+The worker reads these variables (server 1 only):
 
 | Variable | Overrides |
 | --- | --- |
@@ -144,11 +159,11 @@ The worker reads these variables:
 
 They are **not** delivered by the Paperclip host. The host builds each plugin worker's environment from scratch (a minimal set: `PATH`, `NODE_PATH`, `PAPERCLIP_PLUGIN_ID`, `NODE_ENV`, `TZ`, and a couple of deployment-mode variables) and deliberately does not forward its own `process.env` into the worker. So for an installed plugin these variables are always empty, and they are only useful when running the worker outside the host, such as under the plugin SDK dev server.
 
-For an installed plugin, **operator config is the only supported way** to set `metricsUrl`, `authToken`, and `modelName` — see [Configure](#configure).
+For an installed plugin, **operator config is the only supported way** to set `metricsUrl`, `authToken`, and `modelName` — see [Configure](#configure). The servers 2 and 3 keys (`server2MetricsUrl`, `server2Token`, `server3MetricsUrl`, `server3Token`) have no environment override at all: they are set in the config only.
 
 ## Verify
 
-Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics` check in step 4 does not.
+Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics` and `18082/metrics` checks in step 4 do not. The A9 (`18082`) check needs the A9 Mega's key in your own shell, not a board credential.
 
 1. The plugin is installed and enabled:
 
@@ -168,13 +183,20 @@ Run these on the Paperclip host. The two `/api/plugins` routes below need a **bo
 
 3. The panel appears bottom-right on any signed-in Paperclip page, and its status dot turns green.
 
-4. Check the data source directly, without the plugin at all:
+4. Check the data source directly, without the plugin at all. Server 1 (hpcserver, no key):
 
    ```bash
    curl -s http://127.0.0.1:18081/metrics | grep vllm:generation_tokens_total
    ```
 
-   If this returns lines, the endpoint is up and the panel should follow within a few seconds.
+   Server 2 (the A9 Mega, behind Caddy, needs the key). Type the key into your own shell's `A9_KEY` variable — never paste it into the plugin settings, a chat, a file, or anywhere it is logged:
+
+   ```bash
+   read -rs A9_KEY   # type the A9 key, press Enter; it stays in your shell only
+   curl -s -H "Authorization: Bearer $A9_KEY" http://127.0.0.1:18082/metrics | grep -E '^(vllm|llamacpp):' | head
+   ```
+
+   If these return lines, the endpoint is up and the panel should follow within a few seconds.
 
 ## Troubleshooting
 
@@ -196,7 +218,10 @@ The CLI only carries a board credential once it has been connected as a board op
 paperclipai connect --persona board
 ```
 
-- **Panel shows "Model server unreachable".** The worker cannot reach the endpoint. Check the endpoint directly (`curl -s http://127.0.0.1:18081/metrics`), check the configured `metricsUrl`, and check the token (a 401/403 from the endpoint means the token is missing or wrong).
+- **A server's section shows "Model server unreachable".** That server's scrape failed. Check its endpoint directly (server 1: `curl -s http://127.0.0.1:18081/metrics`; the A9 Mega: the `18082/metrics` check in [Verify](#verify)), its configured URL (`metricsUrl`, `server2MetricsUrl`, `server3MetricsUrl`), and its token. See the status-code notes below.
+- **A server's section shows `HTTP 401`.** That server's bearer token is missing or wrong. Set the server's token field (`authToken`, `server2Token`, or `server3Token`) in the plugin settings; the A9 Mega needs `server2Token` on every request.
+- **A llama.cpp server answers `HTTP 404` or `HTTP 501`.** `llama-server` publishes `/metrics` only when it was started with `--metrics`; without that flag the path does not exist. A 404 can also mean the Caddy in front of the server does not forward `/metrics`. Start llama.cpp with `--metrics`, and check the Caddy route.
+- **A llama.cpp server answers `HTTP 400 "model name is missing"`.** The server runs in llama.cpp router mode (several models behind one endpoint), which is not supported yet.
 - **Panel shows "Model server unreachable" with an error mentioning "private/reserved ranges".** The worker is routing through the host's guarded HTTP client instead of scraping directly; that is the bug fixed in RUK-52, so make sure the installed build includes it.
 - **Panel shows "Panel unavailable".** The worker itself is not responding. Check the logs for worker errors with `paperclipai plugin logs rukoz.throughput-panel`, then restart it with a disable/enable cycle:
 
@@ -209,7 +234,7 @@ paperclipai connect --persona board
 - **The model server restarted and the panel stopped updating.** The worker recovers on its own: a failed poll is caught, `lastError` is set, and the next interval retries — the poll loop is never torn down by a failed scrape. A counter reset (which is what a vLLM restart looks like, because the cumulative counters drop) clears the sample window, so rates read `—` for one poll and refill within about 10 s (two poll cycles); this is the same behaviour noted in [Scope and limits](#scope-and-limits) below. If the plugin **worker process** was replaced (a host restart, or the worker being respawned), an already-open browser tab can keep showing the snapshot it last received — **reload the browser page** to re-establish the UI data bridge. Reloading the page is the first thing to try, and it is cheaper than a disable/enable cycle. Only if a page reload does not help is a disable/enable cycle warranted, and the logs (`paperclipai plugin logs rukoz.throughput-panel`) are the place to look.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
 - **Selecting 15m right after the worker starts shows a smaller average.** The worker averages over whatever history it has retained so far, so before 15 minutes have accumulated the readout covers that shorter span — the average's tooltip says how many seconds of history it has. The graph fills in over the following minutes as more samples arrive.
-- **Wrong `model_name`.** The metrics are labelled `model_name="swift-1.5"`. If the configured `modelName` does not match, the worker logs a `no vllm metrics for model "..."` error and the panel stays empty. Set `modelName` to `swift-1.5` (or whatever label the server actually serves).
+- **Server 1's section is empty.** If `modelName` names a `model_name` the server does not serve, the worker logs a `no vllm metrics for model "..."` error and the section stays empty. Blank `modelName` now shows every model the server serves — the old `swift-1.5` default is gone, so leave it blank to see all of them.
 
 ## Project layout
 
