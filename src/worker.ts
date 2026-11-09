@@ -143,7 +143,10 @@ function configureServers(ctx: PluginContext, config: Record<string, unknown> | 
       resolveToken: (raw) => resolveToken(ctx, raw, probeCompanyId),
       select: (text, options) => selectSamples(parsePrometheusText(text), options),
       now: () => Date.now(),
-      timeoutMs: Math.min(4000, pollIntervalMs - 500),
+      // A getter, so a poll-interval change alone (which keeps the pollers) still shortens the timeout.
+      get timeoutMs() {
+        return Math.min(4000, pollIntervalMs - 500);
+      },
     }),
   );
 }
