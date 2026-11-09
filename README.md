@@ -2,7 +2,9 @@
 
 ## What it is
 
-A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM or llama.cpp — as a small floating panel in the Paperclip UI. A worker on the Paperclip host polls every configured server's Prometheus metrics endpoint and tells the two metrics formats apart by their metric names (`vllm:…` / `llamacpp:…`). The plugin id is `rukoz.throughput-panel`.
+A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM, llama.cpp or **oMLX** — as a small floating panel in the Paperclip UI. The third is the M5U: a Mac on the LAN running oMLX 0.7.4.dev1 ([github.com/jundot/omlx](https://github.com/jundot/omlx)), serving `swift15-oq8e`, which this Mac reaches at `http://127.0.0.1:18083` through the launchd forwarder `com.drukoz.llm-forward-m5u` (→ `192.168.1.183:8081`). A worker on the Paperclip host reads Prometheus metrics from vLLM and llama.cpp, and oMLX's JSON activity and status routes, and tells the formats apart by their metric names (`vllm:…` / `llamacpp:…`) or by an oMLX activity body; the panel's kind label for that server reads `oMLX`. The plugin id is `rukoz.throughput-panel`.
+
+oMLX has no Prometheus `/metrics` endpoint — it answers 404 — so the worker reads two JSON routes instead: `GET /admin/api/activity`, the live rows of every request being prefilled or generated, per loaded model, and `GET /api/status`, the session totals of prompt, completion and cached tokens. oMLX adds a request's tokens to those totals only when the request finishes, so the worker computes live tok/s from the activity rows (each request's growing `generated_tokens`) and uses the totals for the tokens a request produced after the last poll, and for the cache hit rate.
 
 The panel has one section per configured server, headed by the server's label, and inside it one block per model the server reports. The collapsed pill shows the total generation tok/s summed across every server.
 
@@ -12,9 +14,9 @@ Each model block shows:
 - Per-request tok/s — the speed a single agent sees while decoding (decode tokens divided by decode time)
 - Time to first token (TTFT), the mean over requests in the window (vLLM only)
 - Requests running and waiting
-- KV cache usage (vLLM, and llama.cpp servers that report it, such as the A9's Gufo)
-- Prefix-cache hit rate (vLLM, and llama.cpp servers that report it, such as the A9's Gufo)
-- MTP / draft (speculative decoding) acceptance rate
+- KV cache usage (vLLM, and llama.cpp servers that report it, such as the A9's Gufo; not oMLX)
+- Prefix-cache hit rate (vLLM, llama.cpp servers that report it, such as the A9's Gufo, and oMLX)
+- MTP / draft (speculative decoding) acceptance rate (not oMLX)
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`
 - An explicit unreachable state, per server, when that server's endpoint cannot be reached
@@ -96,16 +98,16 @@ Configuration is company-scoped. There are two ways to set it:
 | `server2Label` | string | `A9 Mega` | Server 2's label, shown in the panel. |
 | `server2MetricsUrl` | string | `http://127.0.0.1:18082/metrics` | Server 2's Prometheus `/metrics` endpoint — the A9 Mega (Strix Halo). Save it empty to hide this server. |
 | `server2Token` | secret | *(built-in A9 metrics key)* | Server 2's bearer token. Leave it empty for the A9 Mega: the plugin has its read-only metrics key built in. |
-| `server3Label` | string | `Server 3` | Server 3's label, shown in the panel. |
-| `server3MetricsUrl` | string | *(none)* | Server 3's Prometheus `/metrics` endpoint. Optional; leave empty to hide this server. |
-| `server3Token` | secret | *(none)* | Server 3's optional bearer token. |
+| `server3Label` | string | `M5U` | Server 3's label, shown in the panel. |
+| `server3MetricsUrl` | string | `http://127.0.0.1:18083/admin/api/activity` | The M5U's oMLX activity route; save it empty to hide this server. |
+| `server3Token` | secret | *(none)* | oMLX's main API key; no built-in key. |
 | `pollIntervalMs` | number | `5000` | Poll interval in milliseconds; minimum 1000, clamped to 60000. |
 | `claudeAccount1Label` … `claudeAccount3Label` | string | *(none)* | Shown in the panel as "Claude · <label>"; blank means "Account <n>". |
 | `claudeAccount1Token` … `claudeAccount3Token` | secret | *(none)* | A Claude Code token for that account, from `claude setup-token`, stored as a Paperclip secret. A slot without a token is ignored. A raw value pasted instead stays in these settings as plain text. |
 | `claudePath` | string | `/opt/homebrew/bin/claude` | Absolute path of the Claude Code CLI the checks run. |
 | `claudeCheckMinutes` | number | `15` | Minutes between checks of one account; 5 to 120. |
 
-A server slot is enabled when its metrics URL, after defaults, is a non-blank string: server 1 is always on; server 2 is on unless `server2MetricsUrl` is saved as an empty string; server 3 is on only when `server3MetricsUrl` is set.
+A server slot is enabled when its metrics URL, after defaults, is a non-blank string: server 1 is always on; server 2 is on unless `server2MetricsUrl` is saved as an empty string; server 3 is on unless `server3MetricsUrl` is saved as an empty string.
 
 The current hpcserver endpoint answers with HTTP 200 and no `Authorization` header, so `authToken` is optional — the plugin sends a token to a server only when that server has one configured. The A9 Mega is behind Caddy, which answers 401 to every request without `Authorization: Bearer <key>`, so the plugin sends its built-in read-only A9 metrics key there (Caddy accepts that key only for `/metrics` and `/v1/models`). `server2Token`, when set, replaces it.
 
@@ -122,6 +124,8 @@ For the config route, the `authToken` value may be either a literal string or a 
 The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.** The one exception is the A9 Mega's read-only metrics key in `src/servers.ts` (see `CLAUDE.md`).
 
 Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. The A9 Mega needs nothing here: with **Server 2: token** empty and the default URL, the plugin sends its built-in read-only metrics key. Set the field only to use a different key; if you point server 2 at another URL, the built-in key is not sent.
+
+The M5U is the opposite: **Server 3: token** has no built-in key, and it must be oMLX's **main** API key. oMLX's activity route is an admin route, so the main key is required there and a sub-key is answered `401`; `/api/status` accepts any key. Pick the Paperclip secret the M5U AI connection uses, if that secret holds oMLX's main key, or press **+** to store the main key as a new secret. The main key also allows inference and every oMLX admin action — unloading models, restarting the server, changing settings — so the plugin limits it narrowly: it sends it only with `GET` to the two oMLX routes on that server, the configured `server3MetricsUrl` and the same server's `/api/status`, and never logs, stores or shows it.
 
 ### Claude accounts
 
@@ -163,7 +167,7 @@ For an installed plugin, **operator config is the only supported way** to set `m
 
 ## Verify
 
-Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics` and `18082/metrics` checks in step 4 do not. The A9 (`18082`) check needs the A9 Mega's key in your own shell, not a board credential.
+Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics`, `18082/metrics` and `18083` checks in step 4 do not. The A9 (`18082`) check needs the A9 Mega's key in your own shell, not a board credential; the M5U (`18083`) checks need oMLX's main key the same way, and its `/health` needs no key at all.
 
 1. The plugin is installed and enabled:
 
@@ -196,6 +200,17 @@ Run these on the Paperclip host. The two `/api/plugins` routes below need a **bo
    curl -s -H "Authorization: Bearer $A9_KEY" http://127.0.0.1:18082/metrics | grep -E '^(vllm|llamacpp):' | head
    ```
 
+   The M5U (oMLX; `/health` needs no key, the two JSON routes need oMLX's main key). Type the key into your own shell's `M5U_KEY` variable — never paste it as plain text into a chat, a file, or anywhere it is logged (in the plugin settings it goes in only through the secret picker of **Server 3: token**):
+
+   ```bash
+   curl -s http://127.0.0.1:18083/health
+   read -rs M5U_KEY   # type oMLX's main key, press Enter; it stays in your shell only
+   curl -s -H "Authorization: Bearer $M5U_KEY" http://127.0.0.1:18083/admin/api/activity | head -c 600; echo
+   curl -s -H "Authorization: Bearer $M5U_KEY" http://127.0.0.1:18083/api/status | head -c 600; echo
+   ```
+
+   Expected: `/health` answers `{"status":"healthy","default_model":"swift15-oq8e",...}`; the activity route answers JSON starting `{"active_models":{"models":[{"id":"swift15-oq8e",...`; `/api/status` answers JSON with `"total_completion_tokens"`.
+
    If these return lines, the endpoint is up and the panel should follow within a few seconds.
 
 ## Troubleshooting
@@ -218,8 +233,9 @@ The CLI only carries a board credential once it has been connected as a board op
 paperclipai connect --persona board
 ```
 
-- **A server's section shows "Model server unreachable".** That server's scrape failed. Check its endpoint directly (server 1: `curl -s http://127.0.0.1:18081/metrics`; the A9 Mega: the `18082/metrics` check in [Verify](#verify)), its configured URL (`metricsUrl`, `server2MetricsUrl`, `server3MetricsUrl`), and its token. See the status-code notes below.
-- **A server's section shows `HTTP 401`.** That server's bearer token is missing or wrong. Set the server's token field (`authToken`, `server2Token`, or `server3Token`) in the plugin settings; the A9 Mega needs `server2Token` on every request.
+- **A server's section shows "Model server unreachable".** That server's scrape failed. Check its endpoint directly (server 1: `curl -s http://127.0.0.1:18081/metrics`; the A9 Mega: the `18082/metrics` check in [Verify](#verify); the M5U: `curl -s http://127.0.0.1:18083/health`), its configured URL (`metricsUrl`, `server2MetricsUrl`, `server3MetricsUrl`), and its token. See the status-code notes below.
+- **A server's section shows `HTTP 401`.** That server's bearer token is missing or wrong. Set the server's token field (`authToken`, `server2Token`, or `server3Token`) in the plugin settings; the A9 Mega needs `server2Token` on every request. The M5U says `HTTP 401 Unauthorized — set this server's token in the plugin settings` when **Server 3: token** is empty: set it. It says `HTTP 401 Unauthorized — oMLX's activity route needs the server's main API key; a sub-key reaches only /api/status` when a sub-key or a wrong key is set: replace it with oMLX's main API key.
+- **The M5U block shows tok/s but no cache hit rate.** Its `/api/status` call failed: the live tok/s comes from the activity route and keeps working, so only the cache hit rate reads empty. Run the `/api/status` check in [Verify](#verify), and check **Server 3: token** — any key reaches that route.
 - **A llama.cpp server answers `HTTP 404` or `HTTP 501`.** `llama-server` publishes `/metrics` only when it was started with `--metrics`; without that flag the path does not exist. A 404 can also mean the Caddy in front of the server does not forward `/metrics`. Start llama.cpp with `--metrics`, and check the Caddy route.
 - **A llama.cpp server answers `HTTP 400 "model name is missing"`.** The server runs in llama.cpp router mode (several models behind one endpoint), which is not supported yet.
 - **Panel shows "Model server unreachable" with an error mentioning "private/reserved ranges".** The worker is routing through the host's guarded HTTP client instead of scraping directly; that is the bug fixed in RUK-52, so make sure the installed build includes it.
@@ -280,6 +296,7 @@ src/
 
 - The panel is fixed bottom-right; it is not draggable or resizable.
 - The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started; the average-window selector does not affect them.
+- oMLX (the M5U) publishes no TTFT, KV cache or MTP numbers, so those read `—` in its blocks, and its prefix-cache hit rate is server-wide — `total_cached_tokens / total_prompt_tokens` — not per model.
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
 - The windowed average skips intervals with no tokens, so it is an average of active throughput, not of wall-clock time; a window in which nothing ran at all reads `0`. The instantaneous readout and the sparkline are not filtered this way.
 - Claude plan usage is shown only in the expanded card, not in the collapsed pill.
