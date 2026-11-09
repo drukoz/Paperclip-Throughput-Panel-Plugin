@@ -52,7 +52,8 @@ test("manifest declares three model servers", () => {
   assert.equal(properties?.server1Label?.default, "hpcserver");
   assert.equal(properties?.server2Label?.default, "A9 Mega");
   assert.equal(properties?.server2MetricsUrl?.default, "http://127.0.0.1:18082/metrics");
-  assert.equal(properties?.server3MetricsUrl?.default, undefined);
+  assert.equal(properties?.server3Label?.default, "M5U");
+  assert.equal(properties?.server3MetricsUrl?.default, "http://127.0.0.1:18083/admin/api/activity");
   // The token fields are secret fields: the settings page shows their picker only for
   // this format, and the host's Ajv check rejects the stored { type: "secret_ref" }
   // object under type "string".

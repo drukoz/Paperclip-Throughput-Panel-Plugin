@@ -92,7 +92,7 @@ async function waitForServers(
 
 test("a rejected fetch yields unreachable and the poll loop keeps running", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://reject.local/metrics", server2MetricsUrl: "", pollIntervalMs: 1000 },
+    config: { metricsUrl: "http://reject.local/metrics", server2MetricsUrl: "", server3MetricsUrl: "", pollIntervalMs: 1000 },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -117,7 +117,7 @@ test("a rejected fetch yields unreachable and the poll loop keeps running", asyn
 
 test("a non-200 response yields unreachable with the HTTP status in the error", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://notfound.local/metrics", server2MetricsUrl: "" },
+    config: { metricsUrl: "http://notfound.local/metrics", server2MetricsUrl: "", server3MetricsUrl: "" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -140,7 +140,7 @@ test("a non-200 response yields unreachable with the HTTP status in the error", 
 test("no token: the fetch carries no Authorization header", async () => {
   delete process.env.THROUGHPUT_METRICS_TOKEN;
   const { ctx } = makeCtx({
-    config: { metricsUrl: "http://notoken.local/metrics", server2MetricsUrl: "", modelName: "test-model" },
+    config: { metricsUrl: "http://notoken.local/metrics", server2MetricsUrl: "", server3MetricsUrl: "", modelName: "test-model" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -163,6 +163,7 @@ test("a literal authToken is sent as a Bearer header", async () => {
     config: {
       metricsUrl: "http://littletoken.local/metrics",
       server2MetricsUrl: "",
+      server3MetricsUrl: "",
       modelName: "test-model",
       authToken: "literal-token",
     },
@@ -188,6 +189,7 @@ test("a secret_ref authToken is resolved and sent as a Bearer header", async () 
     config: {
       metricsUrl: "http://secretref.local/metrics",
       server2MetricsUrl: "",
+      server3MetricsUrl: "",
       modelName: "test-model",
       // The real shape of EnvSecretRefBinding: `secretId`, not `ref`.
       authToken: { type: "secret_ref", secretId: "11111111-2222-3333-4444-555555555555" },
@@ -211,7 +213,7 @@ test("a secret_ref authToken is resolved and sent as a Bearer header", async () 
 
 test("a private/reserved-range rejection leaves the snapshot unreachable and does not throw", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://127.0.0.1:18081/metrics", server2MetricsUrl: "" },
+    config: { metricsUrl: "http://127.0.0.1:18081/metrics", server2MetricsUrl: "", server3MetricsUrl: "" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -234,7 +236,7 @@ test("a private/reserved-range rejection leaves the snapshot unreachable and doe
   }
 });
 
-test("the default config polls hpcserver and the A9", async () => {
+test("the default config polls hpcserver, the A9 and the M5U", async () => {
   const { ctx, snapshot } = makeCtx({ config: {} });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -247,17 +249,18 @@ test("the default config polls hpcserver and the A9", async () => {
     await waitFor(
       () =>
         calls.some((c) => c.url === "http://127.0.0.1:18081/metrics") &&
-        calls.some((c) => c.url === "http://127.0.0.1:18082/metrics"),
+        calls.some((c) => c.url === "http://127.0.0.1:18082/metrics") &&
+        calls.some((c) => c.url === "http://127.0.0.1:18083/admin/api/activity"),
       2000,
     );
     const snap = (await snapshot()) as ServersSnapshot;
     assert.deepEqual(
       snap.servers.map((s) => s.slot),
-      [1, 2],
+      [1, 2, 3],
     );
     assert.deepEqual(
       snap.servers.map((s) => s.label),
-      ["hpcserver", "A9 Mega"],
+      ["hpcserver", "A9 Mega", "M5U"],
     );
   } finally {
     globalThis.fetch = realFetch;
@@ -268,7 +271,7 @@ test("the default config polls hpcserver and the A9", async () => {
 test("every model on a vLLM server is listed", async () => {
   const metrics = `${METRICS_OK}\nvllm:generation_tokens_total{engine="0",model_name="other-model"} 5.0`;
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://twomodels.local/metrics", server2MetricsUrl: "" },
+    config: { metricsUrl: "http://twomodels.local/metrics", server2MetricsUrl: "", server3MetricsUrl: "" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -291,7 +294,7 @@ test("every model on a vLLM server is listed", async () => {
 
 test("a llama.cpp server is read", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: "http://llama.local/metrics", server2MetricsUrl: "" },
+    config: { metricsUrl: "http://llama.local/metrics", server2MetricsUrl: "", server3MetricsUrl: "" },
   });
   const calls: FetchCall[] = [];
   const realFetch = globalThis.fetch;
@@ -318,7 +321,7 @@ test("a llama.cpp server is read", async () => {
 test("server2Token as a secret is resolved with the company id", async () => {
   const resolves: unknown[] = [];
   const { ctx } = makeCtx({
-    config: { metricsUrl: "http://one.local/metrics", server2MetricsUrl: "" },
+    config: { metricsUrl: "http://one.local/metrics", server2MetricsUrl: "", server3MetricsUrl: "" },
     resolveSecret: async (_ref, options) => {
       resolves.push(options);
       return "resolved-secret";
@@ -327,6 +330,7 @@ test("server2Token as a secret is resolved with the company id", async () => {
   const config = {
     metricsUrl: "http://one.local/metrics",
     server2MetricsUrl: "http://two.local/metrics",
+    server3MetricsUrl: "",
     server2Token: { type: "secret_ref", secretId: "22222222-3333-4444-5555-666666666666" },
   };
   const calls: FetchCall[] = [];
@@ -406,6 +410,7 @@ test("plan-probe only reads when the panel is not active", async () => {
   const { ctx, handler } = makeCtx({
     config: {
       metricsUrl: "http://probe.local/metrics",
+      server3MetricsUrl: "",
       claudeAccount1Label: "A",
       claudeAccount1Token: "tok-1",
       claudePath: "/nonexistent/claude-ruk518",
@@ -435,6 +440,7 @@ test("an active read starts a check and reports a missing CLI", async () => {
   const { ctx, handler } = makeCtx({
     config: {
       metricsUrl: "http://probe.local/metrics",
+      server3MetricsUrl: "",
       claudeAccount1Label: "A",
       claudeAccount1Token: "tok-1",
       claudePath: "/nonexistent/claude-ruk518",
@@ -512,7 +518,7 @@ async function waitForProbeRead(
 test("a secret token is resolved with the company id from onConfigChanged", async () => {
   const resolves: { ref: unknown; options: unknown }[] = [];
   const { ctx, handler } = makeCtx({
-    config: { metricsUrl: "http://probe.local/metrics" },
+    config: { metricsUrl: "http://probe.local/metrics", server3MetricsUrl: "" },
     resolveSecret: async (ref, options) => {
       resolves.push({ ref, options });
       return "tok-from-secret";
@@ -520,6 +526,7 @@ test("a secret token is resolved with the company id from onConfigChanged", asyn
   });
   const config = {
     metricsUrl: "http://probe.local/metrics",
+    server3MetricsUrl: "",
     claudeAccount1Label: "A",
     claudeAccount1Token: REF_A,
     claudePath: "/nonexistent/claude-ruk518",
@@ -545,7 +552,7 @@ test("a check started inside a request runs outside it", async () => {
   const request = new AsyncLocalStorage<string>();
   const stores: (string | undefined)[] = [];
   const { ctx, handler } = makeCtx({
-    config: { metricsUrl: "http://probe.local/metrics" },
+    config: { metricsUrl: "http://probe.local/metrics", server3MetricsUrl: "" },
     resolveSecret: async () => {
       stores.push(request.getStore());
       return "tok-from-secret";
@@ -553,6 +560,7 @@ test("a check started inside a request runs outside it", async () => {
   });
   const config = {
     metricsUrl: "http://probe.local/metrics",
+    server3MetricsUrl: "",
     claudeAccount1Label: "A",
     claudeAccount1Token: REF_A,
     claudeAccount2Label: "B",

@@ -35,6 +35,9 @@ function normalizeToken(value: unknown): unknown {
 /** Server 2's default endpoint: the A9 Mega through the launchd forwarder `com.drukoz.llm-forward-a9`. */
 const A9_METRICS_URL = "http://127.0.0.1:18082/metrics";
 
+/** Server 3's default endpoint: the M5U's oMLX activity route, through the launchd forwarder `com.drukoz.llm-forward-m5u`. */
+const M5U_ACTIVITY_URL = "http://127.0.0.1:18083/admin/api/activity";
+
 /**
  * The A9 Mega's read-only metrics key, hard-coded at the owner's request (RUK-869) so the A9 works with no
  * settings. Caddy on the A9 accepts it only for `/metrics` and `/v1/models`, never for inference
@@ -73,11 +76,12 @@ export function resolveServers(
     });
   }
 
-  const url3 = nonBlankString(cfg.server3MetricsUrl);
-  if (url3 !== null) {
+  const raw3 = cfg.server3MetricsUrl;
+  const url3 = typeof raw3 === "string" ? raw3.trim() : M5U_ACTIVITY_URL;
+  if (url3 !== "") {
     servers.push({
       slot: 3,
-      label: nonBlankString(cfg.server3Label) ?? "Server 3",
+      label: nonBlankString(cfg.server3Label) ?? "M5U",
       metricsUrl: url3,
       token: normalizeToken(cfg.server3Token),
       modelName: null,
