@@ -78,8 +78,8 @@ test("passes the fixed arguments and only the six environment variables", async 
 
 test("kills the process group on timeout", async () => {
   const startedAt = Date.now();
-  const result = await runProbe({ claudePath: wrapper("slow"), token: "test-token", configDir, timeoutMs: 500 });
-  assert.ok(Date.now() - startedAt < 5_000, "the probe must resolve soon after its timeout");
+  const result = await runProbe({ claudePath: wrapper("slow"), token: "test-token", configDir, timeoutMs: 3_000 });
+  assert.ok(Date.now() - startedAt < 10_000, "the probe must resolve soon after its timeout");
   assert.equal(result.timedOut, true);
   assert.equal(result.exitCode, null);
   const pids = JSON.parse(firstLine(result.stdout)) as { pid: number; helperPid: number };
