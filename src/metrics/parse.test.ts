@@ -158,6 +158,11 @@ const LLAMA_FIXTURE = readFileSync(
   "utf8",
 );
 
+const GUFO_FIXTURE = readFileSync(
+  new URL("./fixtures/gufo-a9-metrics.txt", import.meta.url),
+  "utf8",
+);
+
 const LIVE_FIXTURE = readFileSync(
   new URL("./fixtures/live-vllm-metrics.txt", import.meta.url),
   "utf8",
@@ -195,6 +200,55 @@ test("selectSamples ignores modelName on llama.cpp", () => {
   assert.equal(result?.kind, ServerKind.LlamaCpp);
   assert.equal(result?.models.length, 1);
   assert.equal(result?.models[0]?.modelName, null);
+});
+
+test("selectSamples reads the A9 Mega's Gufo capture", () => {
+  const series = parsePrometheusText(GUFO_FIXTURE);
+  const result = selectSamples(series, { at: 5 });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.LlamaCpp);
+  assert.equal(result?.models.length, 1);
+  assert.equal(result?.models[0]?.modelName, null);
+  assert.deepEqual(result?.models[0]?.sample, {
+    at: 5,
+    generationTokens: 232246,
+    promptTokens: 1924101,
+    prefixCacheHits: 19263150,
+    prefixCacheQueries: 21187251,
+    specAcceptedTokens: 141858,
+    specDraftTokens: 180179,
+    numRequestsRunning: 0,
+    numRequestsWaiting: 0,
+    kvCacheUsage: 0,
+    decodeTokens: 232246,
+    decodeSeconds: 5976.7097641059936,
+    firstTokenSeconds: 0,
+    firstTokenCount: 0,
+  });
+});
+
+test("llama.cpp kvCacheUsage takes the ratio and stays null without it", () => {
+  const withRatio = parsePrometheusText(
+    "llamacpp:tokens_predicted_total 10\nllamacpp:kv_cache_usage_ratio 0.25\n",
+  );
+  assert.equal(selectSamples(withRatio, { at: 0 })?.models[0]?.sample.kvCacheUsage, 0.25);
+  const withoutRatio = parsePrometheusText("llamacpp:tokens_predicted_total 10\n");
+  assert.equal(selectSamples(withoutRatio, { at: 0 })?.models[0]?.sample.kvCacheUsage, null);
+});
+
+test("llama.cpp prefix-cache counters stay 0 without the cached metric", () => {
+  const withoutCached = parsePrometheusText(
+    "llamacpp:tokens_predicted_total 10\nllamacpp:prompt_tokens_total 40\n",
+  );
+  const plain = selectSamples(withoutCached, { at: 0 })?.models[0]?.sample;
+  assert.equal(plain?.prefixCacheHits, 0);
+  assert.equal(plain?.prefixCacheQueries, 0);
+  const withCached = parsePrometheusText(
+    "llamacpp:tokens_predicted_total 10\nllamacpp:prompt_tokens_total 40\nllamacpp:prompt_tokens_cached_total 60\n",
+  );
+  const gufo = selectSamples(withCached, { at: 0 })?.models[0]?.sample;
+  assert.equal(gufo?.prefixCacheHits, 60);
+  assert.equal(gufo?.prefixCacheQueries, 100);
 });
 
 const TWO_MODELS = [
