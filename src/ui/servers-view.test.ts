@@ -74,6 +74,7 @@ test("totalGeneration is null without live models", () => {
 test("kindLabel", () => {
   assert.equal(kindLabel(ServerKind.Vllm), "vLLM");
   assert.equal(kindLabel(ServerKind.LlamaCpp), "llama.cpp");
+  assert.equal(kindLabel(ServerKind.Omlx), "oMLX");
   assert.equal(kindLabel(ServerKind.Unknown), "");
 });
 

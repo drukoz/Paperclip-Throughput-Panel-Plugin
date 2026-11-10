@@ -67,17 +67,20 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "string",
         title: "Server 3: label",
         description: "Shown in the panel.",
-        default: "Server 3",
+        default: "M5U",
       },
       server3MetricsUrl: {
         type: "string",
         title: "Server 3: metrics URL",
-        description: "Optional. Leave empty to hide this server.",
+        description:
+          "The M5U (oMLX on a Mac Studio): its /admin/api/activity route. Save it empty to hide this server.",
+        default: "http://127.0.0.1:18083/admin/api/activity",
       },
       server3Token: {
         format: "secret-ref",
         title: "Server 3: token",
-        description: "Optional bearer token for server 3.",
+        description:
+          "The M5U's oMLX main API key: pick the Paperclip secret that the M5U AI connection uses, or press + to store it. A sub-key answers 401 on the activity route.",
       },
       pollIntervalMs: {
         type: "number",

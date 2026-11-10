@@ -88,21 +88,56 @@ const slot2: ServerSetting = {
   modelName: null,
 };
 
-test("resolveServers with no config gives hpcserver and the A9", () => {
+const m5u: ServerSetting = {
+  slot: 3,
+  label: "M5U",
+  metricsUrl: "http://127.0.0.1:18083/admin/api/activity",
+  token: "k",
+  modelName: null,
+};
+
+const ACTIVITY = JSON.stringify({
+  active_models: {
+    models: [
+      {
+        id: "swift15-oq8e",
+        active_requests: 1,
+        waiting_requests: 0,
+        prefilling: [],
+        generating: [{ request_id: "r1", generated_tokens: 100, tokens_per_second: 50, prompt_tokens: 1000 }],
+      },
+    ],
+  },
+});
+
+const STATUS = JSON.stringify({
+  status: "ok",
+  default_model: "swift15-oq8e",
+  total_prompt_tokens: 20000,
+  total_completion_tokens: 5000,
+  total_cached_tokens: 8000,
+});
+
+test("resolveServers with no config gives hpcserver, the A9 and the M5U", () => {
   const servers = resolveServers(null, {});
   assert.deepEqual(
     servers.map((s) => s.slot),
-    [1, 2],
+    [1, 2, 3],
   );
   assert.deepEqual(
     servers.map((s) => s.label),
-    ["hpcserver", "A9 Mega"],
+    ["hpcserver", "A9 Mega", "M5U"],
   );
   assert.deepEqual(
     servers.map((s) => s.metricsUrl),
-    ["http://127.0.0.1:18081/metrics", "http://127.0.0.1:18082/metrics"],
+    [
+      "http://127.0.0.1:18081/metrics",
+      "http://127.0.0.1:18082/metrics",
+      "http://127.0.0.1:18083/admin/api/activity",
+    ],
   );
   assert.equal(servers[0]?.token, null);
+  assert.equal(servers[2]?.token, null);
   // The A9 gets its built-in read-only metrics key (never written out in a test).
   assert.match(String(servers[1]?.token), /^[0-9a-f]{64}$/);
   for (const s of servers) assert.equal(s.modelName, null);
@@ -128,6 +163,21 @@ test("resolveServers hides slot 2 when its URL is saved empty and adds slot 3 wh
   assert.ok(slot3);
   assert.equal(slot3.metricsUrl, "http://x:1/metrics");
   assert.equal(slot3.label, "Lab");
+});
+
+test("resolveServers hides slot 3 when its URL is saved empty", () => {
+  const servers = resolveServers({ server3MetricsUrl: "" }, {});
+  assert.deepEqual(
+    servers.map((s) => s.slot),
+    [1, 2],
+  );
+});
+
+test("resolveServers sends server3Token only from the settings", () => {
+  const bare = resolveServers({}, {});
+  assert.equal(bare[2]?.token, null);
+  const withRef = resolveServers({ server3Token: { type: "secret_ref", secretId: "s" } }, {});
+  assert.deepEqual(withRef[2]?.token, { type: "secret_ref", secretId: "s" });
 });
 
 test("resolveServers keeps secret refs and trims strings", () => {
@@ -217,7 +267,77 @@ test("a select miss is unreachable with the URL in the error", async () => {
   await poller.poll();
   const snap = poller.snapshot();
   assert.equal(snap.status, ServerStatus.Unreachable);
-  assert.equal(snap.error, "no vLLM or llama.cpp metrics at http://127.0.0.1:18081/metrics");
+  assert.equal(snap.error, "no vLLM, llama.cpp or oMLX metrics at http://127.0.0.1:18081/metrics");
+});
+
+test("an oMLX activity body is read with /api/status", async () => {
+  const fakes = makeFakes([ok(ACTIVITY), ok(STATUS)], []);
+  const poller = createServerPoller(m5u, fakes.deps);
+  await poller.poll();
+  assert.deepEqual(
+    fakes.calls.map((c) => c.url),
+    ["http://127.0.0.1:18083/admin/api/activity", "http://127.0.0.1:18083/api/status"],
+  );
+  assert.equal(fakes.calls[0]?.headers.Authorization, "Bearer k");
+  assert.equal(fakes.calls[1]?.headers.Authorization, "Bearer k");
+  const snap = poller.snapshot();
+  assert.equal(snap.kind, ServerKind.Omlx);
+  assert.equal(snap.status, ServerStatus.Ok);
+  assert.equal(snap.error, null);
+  assert.equal(snap.models.length, 1);
+  const model = snap.models[0];
+  assert.ok(model);
+  assert.equal(model.modelName, "swift15-oq8e");
+  assert.equal(model.numRequestsRunning, 1);
+  assert.equal(model.prefixCacheHitRatePct, 40);
+});
+
+test("oMLX tok/s comes from the activity rows", async () => {
+  const activity350 = JSON.stringify({
+    active_models: {
+      models: [
+        {
+          id: "swift15-oq8e",
+          active_requests: 1,
+          waiting_requests: 0,
+          prefilling: [],
+          generating: [{ request_id: "r1", generated_tokens: 350, tokens_per_second: 50, prompt_tokens: 1000 }],
+        },
+      ],
+    },
+  });
+  const fakes = makeFakes([ok(ACTIVITY), ok(STATUS), ok(activity350), ok(STATUS)], []);
+  const poller = createServerPoller(m5u, fakes.deps);
+  fakes.setTime(1_000);
+  await poller.poll();
+  fakes.setTime(6_000);
+  await poller.poll();
+  const model = poller.snapshot().models[0];
+  assert.ok(model);
+  assert.equal(model.instant?.generation, 50);
+});
+
+test("a failed /api/status still shows oMLX", async () => {
+  const fakes = makeFakes([ok(ACTIVITY), new Response("err", { status: 500 })], []);
+  const poller = createServerPoller(m5u, fakes.deps);
+  await poller.poll();
+  const snap = poller.snapshot();
+  assert.equal(snap.status, ServerStatus.Ok);
+  assert.equal(snap.kind, ServerKind.Omlx);
+  assert.equal(snap.models.length, 1);
+  assert.equal(snap.models[0]?.prefixCacheHitRatePct, null);
+});
+
+test("a 401 on the oMLX activity route asks for the main key", async () => {
+  const fakes = makeFakes([new Response("{}", { status: 401, statusText: "Unauthorized" })], []);
+  const poller = createServerPoller({ ...m5u, token: "sub" }, fakes.deps);
+  await poller.poll();
+  const snap = poller.snapshot();
+  assert.equal(
+    snap.error,
+    "HTTP 401 Unauthorized — oMLX's activity route needs the server's main API key; a sub-key reaches only /api/status",
+  );
+  assert.equal(fakes.calls.length, 1);
 });
 
 test("a rejected fetch is unreachable and poll does not throw", async () => {

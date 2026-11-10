@@ -66,6 +66,64 @@ const llamaServer = createServer((req, res) => {
   res.end();
 });
 
+const MAIN_KEY = "main-test-key";
+const SUB_KEY = "sub-test-key";
+
+/** The fake oMLX activity's only moving field, and a log of every request the worker made to it. */
+let omlxGenerated = 100;
+const omlxRequests: { method: string; url: string; auth: string | undefined }[] = [];
+
+const omlxServer = createServer((req, res) => {
+  omlxRequests.push({ method: req.method ?? "", url: req.url ?? "", auth: req.headers.authorization });
+  const auth = req.headers.authorization;
+  if (req.url === "/admin/api/activity") {
+    if (auth !== `Bearer ${MAIN_KEY}`) {
+      res.writeHead(401);
+      res.end();
+      return;
+    }
+    const body = {
+      active_models: {
+        models: [
+          {
+            id: "swift15-oq8e",
+            active_requests: 1,
+            waiting_requests: 0,
+            prefilling: [],
+            generating: [
+              { request_id: "r1", generated_tokens: omlxGenerated, tokens_per_second: 50, prompt_tokens: 1000 },
+            ],
+          },
+        ],
+      },
+    };
+    omlxGenerated += 200;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+    return;
+  }
+  if (req.url === "/api/status") {
+    if (auth !== `Bearer ${MAIN_KEY}` && auth !== `Bearer ${SUB_KEY}`) {
+      res.writeHead(401);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        default_model: "swift15-oq8e",
+        total_prompt_tokens: 20000,
+        total_completion_tokens: 5000,
+        total_cached_tokens: 8000,
+      }),
+    );
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+
 async function listen(server: Server): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -74,6 +132,7 @@ async function listen(server: Server): Promise<string> {
 
 const vllmBase = await listen(vllmServer);
 const llamaBase = await listen(llamaServer);
+const omlxBase = await listen(omlxServer);
 
 after(async () => {
   await new Promise<void>((resolve, reject) =>
@@ -81,6 +140,9 @@ after(async () => {
   );
   await new Promise<void>((resolve, reject) =>
     llamaServer.close((err) => (err ? reject(err) : resolve())),
+  );
+  await new Promise<void>((resolve, reject) =>
+    omlxServer.close((err) => (err ? reject(err) : resolve())),
   );
 });
 
@@ -138,6 +200,7 @@ test("both servers are read, every model named", async () => {
       metricsUrl: `${vllmBase}/metrics`,
       server2MetricsUrl: `${llamaBase}/metrics`,
       server2Token: TEST_TOKEN,
+      server3MetricsUrl: "",
       pollIntervalMs: 1000,
     },
   });
@@ -187,6 +250,7 @@ test("the A9 without its token says so", async () => {
     config: {
       metricsUrl: `${vllmBase}/metrics`,
       server2MetricsUrl: `${llamaBase}/metrics`,
+      server3MetricsUrl: "",
       pollIntervalMs: 1000,
     },
   });
@@ -213,7 +277,7 @@ test("the A9 without its token says so", async () => {
 test("a secret-ref token is resolved with the company id", async () => {
   const resolves: unknown[] = [];
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", pollIntervalMs: 1000 },
+    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", server3MetricsUrl: "", pollIntervalMs: 1000 },
     resolveSecret: async (_ref, options) => {
       resolves.push(options);
       return TEST_TOKEN;
@@ -222,6 +286,7 @@ test("a secret-ref token is resolved with the company id", async () => {
   const config = {
     metricsUrl: `${vllmBase}/metrics`,
     server2MetricsUrl: `${llamaBase}/metrics`,
+    server3MetricsUrl: "",
     server2Token: { type: "secret_ref", secretId: "33333333-4444-5555-6666-777777777777" },
     pollIntervalMs: 1000,
   };
@@ -244,13 +309,164 @@ test("a secret-ref token is resolved with the company id", async () => {
 
 test("saving server2MetricsUrl empty hides the A9", async () => {
   const { ctx, snapshot } = makeCtx({
-    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "" },
+    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", server3MetricsUrl: "" },
   });
   try {
     await plugin.definition.setup(ctx);
     const snap = await snapshot();
     assert.equal(snap.servers.length, 1);
     assert.equal(snap.servers[0]!.slot, 1);
+  } finally {
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("the M5U is read through the worker", async () => {
+  omlxRequests.length = 0;
+  const { ctx, snapshot } = makeCtx({
+    config: {
+      metricsUrl: `${vllmBase}/metrics`,
+      server2MetricsUrl: "",
+      server3MetricsUrl: `${omlxBase}/admin/api/activity`,
+      server3Token: MAIN_KEY,
+      pollIntervalMs: 1000,
+    },
+  });
+  try {
+    await plugin.definition.setup(ctx);
+    const snap = await waitForServers(
+      snapshot,
+      (servers) =>
+        servers.length === 2 &&
+        servers[1]?.status === ServerStatus.Ok &&
+        servers[1]?.models[0]?.instant != null,
+    );
+    const omlx = snap.servers[1]!;
+    assert.equal(omlx.slot, 3);
+    assert.equal(omlx.label, "M5U");
+    assert.equal(omlx.kind, ServerKind.Omlx);
+    assert.equal(omlx.models.length, 1);
+    const model = omlx.models[0]!;
+    assert.equal(model.modelName, "swift15-oq8e");
+    assert.ok((model.instant?.generation ?? 0) > 0, "oMLX instant.generation must be positive");
+    assert.equal(model.kvCacheUsagePct, null);
+    assert.equal(model.mtpAcceptanceRatePct, null);
+    assert.equal(model.timeToFirstTokenMs["1m"], null);
+    assert.equal(model.numRequestsRunning, 1);
+    assert.equal(model.numRequestsWaiting, 0);
+    const hitRate = model.prefixCacheHitRatePct;
+    assert.notEqual(hitRate, null);
+    assert.ok(
+      Math.abs(hitRate! - 40) < 1e-9,
+      `expected prefixCacheHitRatePct within 1e-9 of 40, got ${hitRate}`,
+    );
+    const perRequest = model.perRequestTokensPerSec["1m"];
+    assert.notEqual(perRequest, null);
+    assert.ok(
+      Math.abs(perRequest! - 50) < 1e-6,
+      `expected perRequestTokensPerSec["1m"] within 1e-6 of 50, got ${perRequest}`,
+    );
+
+    assert.ok(
+      omlxRequests.some((r) => r.url === "/api/status"),
+      "the worker must fetch /api/status at least once",
+    );
+    for (const r of omlxRequests) {
+      assert.equal(r.method, "GET");
+      assert.ok(
+        r.url === "/admin/api/activity" || r.url === "/api/status",
+        `unexpected oMLX request url: ${r.url}`,
+      );
+      assert.equal(r.auth, `Bearer ${MAIN_KEY}`);
+    }
+  } finally {
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("the M5U with a sub-key asks for the main key", async () => {
+  const { ctx, snapshot } = makeCtx({
+    config: {
+      metricsUrl: `${vllmBase}/metrics`,
+      server2MetricsUrl: "",
+      server3MetricsUrl: `${omlxBase}/admin/api/activity`,
+      server3Token: SUB_KEY,
+      pollIntervalMs: 1000,
+    },
+  });
+  try {
+    await plugin.definition.setup(ctx);
+    const snap = await waitForServers(
+      snapshot,
+      (servers) =>
+        servers.length === 2 &&
+        servers[1]?.status === ServerStatus.Unreachable &&
+        servers[0]?.status === ServerStatus.Ok,
+    );
+    assert.equal(
+      snap.servers[1]!.error,
+      "HTTP 401 Unauthorized — oMLX's activity route needs the server's main API key; a sub-key reaches only /api/status",
+    );
+  } finally {
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("the M5U without a token says so", async () => {
+  const { ctx, snapshot } = makeCtx({
+    config: {
+      metricsUrl: `${vllmBase}/metrics`,
+      server2MetricsUrl: "",
+      server3MetricsUrl: `${omlxBase}/admin/api/activity`,
+      pollIntervalMs: 1000,
+    },
+  });
+  try {
+    await plugin.definition.setup(ctx);
+    const snap = await waitForServers(
+      snapshot,
+      (servers) =>
+        servers.length === 2 &&
+        servers[1]?.status === ServerStatus.Unreachable &&
+        servers[0]?.status === ServerStatus.Ok,
+    );
+    assert.equal(
+      snap.servers[1]!.error,
+      "HTTP 401 Unauthorized — set this server's token in the plugin settings",
+    );
+  } finally {
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("a secret-ref server3Token is resolved with the company id", async () => {
+  const resolves: unknown[] = [];
+  const { ctx, snapshot } = makeCtx({
+    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", server3MetricsUrl: "", pollIntervalMs: 1000 },
+    resolveSecret: async (_ref, options) => {
+      resolves.push(options);
+      return MAIN_KEY;
+    },
+  });
+  const config = {
+    metricsUrl: `${vllmBase}/metrics`,
+    server2MetricsUrl: "",
+    server3MetricsUrl: `${omlxBase}/admin/api/activity`,
+    server3Token: { type: "secret_ref", secretId: "33333333-4444-5555-6666-777777777777" },
+    pollIntervalMs: 1000,
+  };
+  try {
+    await plugin.definition.setup(ctx);
+    await plugin.definition.onConfigChanged!(config, { companyId: "company-1" });
+    const snap = await waitForServers(
+      snapshot,
+      (servers) => servers.length === 2 && servers[1]?.status === ServerStatus.Ok,
+    );
+    assert.equal(snap.servers[1]!.status, ServerStatus.Ok);
+    assert.ok(resolves.length >= 1, "expected server3Token to be resolved");
+    for (const options of resolves) {
+      assert.deepEqual(options, { companyId: "company-1" });
+    }
   } finally {
     await plugin.definition.onShutdown?.();
   }
