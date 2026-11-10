@@ -151,12 +151,19 @@ function configureServers(ctx: PluginContext, config: Record<string, unknown> | 
   );
 }
 
+/**
+ * (Re)start the poll timer. It runs outside any host request: `onConfigChanged` runs inside the
+ * settings-save request, and a timer started there would tag every later secret read with that
+ * ended request, which the host refuses (RUK-949: the M5U's key never arrived, so oMLX gave 401).
+ */
 function startPolling(ctx: PluginContext): void {
   if (timer !== null) clearInterval(timer);
-  for (const p of pollers) void p.poll();
-  timer = setInterval(() => {
+  runOutsideInvocation(() => {
     for (const p of pollers) void p.poll();
-  }, pollIntervalMs);
+    timer = setInterval(() => {
+      for (const p of pollers) void p.poll();
+    }, pollIntervalMs);
+  });
 }
 
 const plugin = definePlugin({
