@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readFile } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { ServerKind, ServerStatus } from "./types.ts";
 import type { ServerSnapshot, ServersSnapshot } from "./types.ts";
@@ -467,6 +468,37 @@ test("a secret-ref server3Token is resolved with the company id", async () => {
     for (const options of resolves) {
       assert.deepEqual(options, { companyId: "company-1" });
     }
+  } finally {
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("polls after a settings save run outside the save request (RUK-949)", async () => {
+  // Stands in for the SDK's request tag: the host refuses a secret read tagged with a request that has ended.
+  const request = new AsyncLocalStorage<string>();
+  const tags: (string | undefined)[] = [];
+  const { ctx, snapshot } = makeCtx({
+    config: { metricsUrl: `${vllmBase}/metrics`, server2MetricsUrl: "", server3MetricsUrl: "", pollIntervalMs: 1000 },
+    resolveSecret: async () => {
+      tags.push(request.getStore());
+      return MAIN_KEY;
+    },
+  });
+  const config = {
+    metricsUrl: `${vllmBase}/metrics`,
+    server2MetricsUrl: "",
+    server3MetricsUrl: `${omlxBase}/admin/api/activity`,
+    server3Token: { type: "secret_ref", secretId: "33333333-4444-5555-6666-777777777777" },
+    pollIntervalMs: 1000,
+  };
+  try {
+    await plugin.definition.setup(ctx);
+    await request.run("configChanged", () => plugin.definition.onConfigChanged!(config, { companyId: "company-1" }));
+    await waitForServers(snapshot, (servers) => servers.length === 2 && servers[1]?.status === ServerStatus.Ok);
+    const deadline = Date.now() + 4000;
+    while (tags.length < 3 && Date.now() < deadline) await sleep(50);
+    assert.ok(tags.length >= 3, `expected timed polls to resolve the token, got ${tags.length}`);
+    assert.deepEqual(tags.filter((tag) => tag !== undefined), [], "a poll inherited the settings-save request");
   } finally {
     await plugin.definition.onShutdown?.();
   }
