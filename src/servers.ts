@@ -1,6 +1,8 @@
 import type { ServerSnapshot, SelectedSamples, ThroughputSnapshot } from "./types.ts";
 import { ServerKind, ServerStatus } from "./types.ts";
 import { ThroughputWindow } from "./metrics/rates.ts";
+import type { OmlxStatus } from "./metrics/omlx.ts";
+import { OmlxCounters, parseOmlxActivity, parseOmlxStatus } from "./metrics/omlx.ts";
 import { buildSnapshot } from "./snapshot.ts";
 
 /** One enabled model server from the plugin settings. */
@@ -123,6 +125,7 @@ const NAME_FETCH_INTERVAL_MS = 60_000;
 /** Create a poller for one server setting, with all outside world injected through `deps`. */
 export function createServerPoller(setting: ServerSetting, deps: ServerPollerDeps): ServerPoller {
   const windows = new Map<string, ThroughputWindow>();
+  const omlx = new OmlxCounters();
   let lastError: string | null = null;
   let started = false;
   let kind: ServerKind = ServerKind.Unknown;
@@ -141,17 +144,36 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
         lastError = `HTTP ${res.status} ${res.statusText}`.trim();
         if ((res.status === 401 || res.status === 403) && token === null) {
           lastError += " — set this server's token in the plugin settings";
+        } else if (
+          (res.status === 401 || res.status === 403) &&
+          new URL(setting.metricsUrl).pathname.endsWith("/admin/api/activity")
+        ) {
+          lastError += " — oMLX's activity route needs the server's main API key; a sub-key reaches only /api/status";
         }
         return;
       }
       const at = deps.now();
-      const selected = deps.select(
-        await res.text(),
-        setting.modelName === null ? { at } : { at, modelName: setting.modelName },
-      );
+      const text = await res.text();
+      if (disposed) return;
+      const activity = parseOmlxActivity(text);
+      let selected: SelectedSamples | null;
+      if (activity !== null) {
+        let status: OmlxStatus | null = null;
+        try {
+          const statusUrl = new URL("/api/status", setting.metricsUrl).toString();
+          const statusRes = await deps.fetch(statusUrl, { headers, signal: AbortSignal.timeout(deps.timeoutMs) });
+          if (statusRes.ok) status = parseOmlxStatus(await statusRes.json());
+        } catch {
+          /* the totals are optional: live tok/s comes from the activity rows */
+        }
+        if (disposed) return;
+        selected = omlx.update(activity, status, at);
+      } else {
+        selected = deps.select(text, setting.modelName === null ? { at } : { at, modelName: setting.modelName });
+      }
       if (disposed) return;
       if (selected === null) {
-        lastError = `no vLLM or llama.cpp metrics at ${setting.metricsUrl}`;
+        lastError = `no vLLM, llama.cpp or oMLX metrics at ${setting.metricsUrl}`;
         return;
       }
       kind = selected.kind;
