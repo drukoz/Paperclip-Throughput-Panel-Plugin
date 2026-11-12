@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Throughput Panel — mobile harness</title>
+    <style>
+      :root {
+        --plugin-shell-inset: 16px;
+        --plugin-shell-gap: 12px;
+        --sz-safe-bottom: env(safe-area-inset-bottom);
+        --sz-calc-14: calc(5rem + env(safe-area-inset-bottom));
+        --plugin-shell-mobile-bottom: calc(var(--sz-calc-14) + var(--sz-safe-bottom) + var(--plugin-shell-inset));
+      }
+      body { margin: 0; background: #09090b; color: #fafafa; font-family: system-ui, sans-serif; }
+      .page { padding: 16px; line-height: 1.6; }
+      .plugin-app-shell-overlays {
+        position: fixed; inset-inline-end: max(var(--plugin-shell-inset), env(safe-area-inset-right));
+        bottom: max(var(--plugin-shell-inset), var(--sz-safe-bottom)); z-index: 20;
+        display: flex; flex-direction: column; align-items: flex-end; gap: var(--plugin-shell-gap);
+        max-width: calc(100vw - var(--plugin-shell-inset) * 2); pointer-events: none;
+      }
+      .plugin-app-shell-overlay { pointer-events: auto; }
+      .mobile-bottom-nav {
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; height: 64px; background: #27272a;
+        display: grid; grid-template-columns: repeat(5, 1fr); align-items: center; text-align: center; font-size: 12px;
+      }
+      @media (min-width: 768px) { .mobile-bottom-nav { display: none; } }
+      @media (width <= 767px) { .plugin-app-shell-overlays { bottom: var(--plugin-shell-mobile-bottom); } }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>Paperclip — Tasks (harness page)</h1>
+      <p>Static stand-in for a Paperclip page, so the panel can be screenshotted at phone size without signing in.</p>
+      <p>Filler 2: the board lists the agent runs in flight, one row per task, newest first.</p>
+      <p>Filler 3: the filler below is only here to make the page scroll, as a real page does.</p>
+      <p>Filler 4: the panel lives in the host's overlay container, pinned to the bottom-right corner.</p>
+      <p>Filler 5: on a phone the overlay container is lifted above the bottom navigation bar.</p>
+      <p>Filler 6: the harness passes the phone's touch flags, so coarse-pointer styles apply.</p>
+      <p>Filler 7: nothing on this page is live; the panel's numbers come from the harness fixtures.</p>
+      <p>Filler 8: server 1 is hpcserver's vLLM, server 2 the A9 Mega, server 3 the M5U.</p>
+      <p>Filler 9: the third server is unreachable in the fixtures, so the card shows its error line.</p>
+      <p>Filler 10: the Claude section shows one account, "Main", with three meters.</p>
+      <p>Filler 11: expanding the card is what asks the worker for the plan probe, never the pill.</p>
+      <p>Filler 12: scrolling this page keeps the overlay fixed, exactly as it does in Paperclip.</p>
+      <p>Filler 13: the panel's own styles are inline; only the container's come from the host.</p>
+      <p>Filler 14: a 390 by 844 window is an iPhone 14 viewport, the phone size we check.</p>
+      <p>Filler 15: headless Chrome draws at least 500 px of width, still below the 768 px breakpoint.</p>
+      <p>Filler 16: the desktop shots use no touch flags and no bottom nav, for comparison.</p>
+      <p>Filler 17: the collapsed pill is the whole readout: a dot and the total tokens per second.</p>
+      <p>Filler 18: the expanded card is 232 px wide and scrolls if the viewport is short.</p>
+      <p>Filler 19: window buttons pick the 1, 5 or 15 minute average shown in the card.</p>
+      <p>Filler 20: every number in the fixtures is invented; do not read them as a live measurement.</p>
+      <p>Filler 21: RUK-1410 makes the panel usable with a thumb; this page shows the before.</p>
+      <p>Filler 22: keep this paragraph short, like all the others, so the page stays readable.</p>
+      <p>Filler 23: the bottom nav is a copy of Paperclip's five-item mobile bar.</p>
+      <p>Filler 24: its height is 64 px, and the overlay offset adds a safe-area allowance on top.</p>
+      <p>Filler 25: on desktop the nav is hidden by a media query, as in the host.</p>
+      <p>Filler 26: the harness script is a classic script, because Chrome refuses modules from file://.</p>
+      <p>Filler 27: the SDK's data hook is replaced at bundle time by a stub with the fixtures.</p>
+      <p>Filler 28: that is why this page needs no Paperclip server running beside it.</p>
+      <p>Filler 29: run it with npm run harness, which bundles and then shoots the four PNGs.</p>
+      <p>Filler 30: the images land in scripts/mobile-harness/out, which git ignores.</p>
+      <p>Filler 31: re-run it after every change to the panel's layout and look at the phone shots.</p>
+      <p>Filler 32: a card cut off at the top means the panel is taller than the viewport allows.</p>
+      <p>Filler 33: a pill under the nav means the panel ignores the host's overlay offset.</p>
+      <p>Filler 34: buttons under about 40 px tall are hard to hit with a thumb, so check their size.</p>
+      <p>Filler 35: the same page is used for all four screenshots; only flags and URL differ.</p>
+      <p>Filler 36: collapsed state is passed in the URL and written to localStorage before render.</p>
+      <p>Filler 37: that is also how the panel remembers it across reloads in Paperclip.</p>
+      <p>Filler 38: nothing under src/ is touched by the harness; it imports the panel as it is.</p>
+      <p>Filler 39: when the engineers land their mobile change, the phone shots should change with it.</p>
+      <p>Filler 40: that is the whole point of the harness: a before-and-after you can eyeball.</p>
+    </main>
+    <nav class="mobile-bottom-nav">
+      <span>Home</span><span>Tasks</span><span>New Task</span><span>Agents</span><span>Inbox</span>
+    </nav>
+    <aside class="plugin-app-shell-overlays">
+      <div class="plugin-app-shell-overlay" id="root"></div>
+    </aside>
+    <script src="out/harness.js"></script>
+  </body>
+</html>

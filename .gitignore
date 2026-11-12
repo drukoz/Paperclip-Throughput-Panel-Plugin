@@ -1,5 +1,6 @@
 node_modules/
 dist/
+scripts/mobile-harness/out/
 *.log
 # Paperclip run data (agent home, OpenCode snapshots); never commit it
 .paperclip-runtime/
