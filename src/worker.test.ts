@@ -45,11 +45,12 @@ function makeFetchStub(
 /** Minimal mock of the worker-side PluginContext: just config, secrets, logger and data. */
 function makeCtx(options: {
   config?: Record<string, unknown> | null;
+  getConfig?: (companyId?: string) => Promise<Record<string, unknown> | null>;
   resolveSecret?: (ref: unknown, options: unknown) => Promise<string>;
 }) {
   const handlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const ctx = {
-    config: { get: async () => options.config ?? null },
+    config: { get: options.getConfig ?? (async () => options.config ?? null) },
     http: {
       // The worker must scrape with the global fetch, never the host's SSRF-
       // guarded ctx.http.fetch. Fail loudly if a regression calls this.
@@ -576,6 +577,123 @@ test("a check started inside a request runs outside it", async () => {
     await request.run("inv-1", () => handler("plan-probe")!({ active: true }));
     await waitForProbeRead(handler("plan-probe")!, 2);
     assert.deepEqual(stores, [undefined, undefined]);
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("after a restart without replayed settings, a servers request with the company loads them and sends the M5U key", async () => {
+  const resolves: unknown[] = [];
+  const { ctx, handler } = makeCtx({
+    getConfig: async (companyId?: string) => {
+      if (companyId === undefined) throw new Error("company context is required");
+      return {
+        metricsUrl: "http://one.local/metrics",
+        server2MetricsUrl: "",
+        server3MetricsUrl: "http://m5u.local/admin/api/activity",
+        server3Token: { type: "secret_ref", secretId: "33333333-4444-4555-8666-777777777777" },
+      };
+    },
+    resolveSecret: async (_ref, options) => {
+      resolves.push(options);
+      return "m5u-key";
+    },
+  });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(() => new Response(METRICS_OK, { status: 200 }), calls);
+  try {
+    await plugin.definition.setup(ctx);
+    await handler("servers")!({ companyId: "company-1" });
+    await waitFor(() => calls.some((c) => c.url === "http://m5u.local/admin/api/activity"), 2000);
+    const m5u = calls.find((c) => c.url === "http://m5u.local/admin/api/activity")!;
+    assert.deepEqual(m5u.init?.headers, { Authorization: "Bearer m5u-key" });
+    assert.ok(resolves.length >= 1, "expected the M5U token to be resolved");
+    for (const options of resolves) {
+      assert.deepEqual(options, { companyId: "company-1" });
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("a servers request without a company does not ask the host for settings", async () => {
+  let getConfigCalls = 0;
+  const { ctx, handler } = makeCtx({
+    getConfig: async (companyId?: string) => {
+      getConfigCalls += 1;
+      void companyId;
+      return null;
+    },
+  });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(() => new Response(METRICS_OK, { status: 200 }), calls);
+  try {
+    await plugin.definition.setup(ctx);
+    assert.equal(getConfigCalls, 1, "setup reads the config once");
+    await handler("servers")!({});
+    assert.equal(getConfigCalls, 1, "a request without a company must not ask the host for settings");
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("the settings load is not retried within a minute after a failure", async () => {
+  const companyLoads: (string | undefined)[] = [];
+  const { ctx, handler } = makeCtx({
+    getConfig: async (companyId?: string) => {
+      companyLoads.push(companyId);
+      throw new Error("host unavailable");
+    },
+  });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(() => new Response(METRICS_OK, { status: 200 }), calls);
+  try {
+    await plugin.definition.setup(ctx);
+    await handler("servers")!({ companyId: "company-1" });
+    await handler("servers")!({ companyId: "company-1" });
+    const companyLoadsForOne = companyLoads.filter((c) => c === "company-1");
+    assert.equal(companyLoadsForOne.length, 1, "a failed load is retried at most once per minute");
+  } finally {
+    globalThis.fetch = realFetch;
+    await plugin.definition.onShutdown?.();
+  }
+});
+
+test("secrets for polls started by a request-time load run outside that request", async () => {
+  const request = new AsyncLocalStorage<string>();
+  const stores: (string | undefined)[] = [];
+  const { ctx, handler } = makeCtx({
+    getConfig: async (companyId?: string) => {
+      if (companyId === undefined) throw new Error("company context is required");
+      return {
+        metricsUrl: "http://one.local/metrics",
+        server2MetricsUrl: "",
+        server3MetricsUrl: "http://m5u.local/admin/api/activity",
+        server3Token: { type: "secret_ref", secretId: "33333333-4444-4555-8666-777777777777" },
+      };
+    },
+    resolveSecret: async (_ref, _options) => {
+      stores.push(request.getStore());
+      return "m5u-key";
+    },
+  });
+  const calls: FetchCall[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = makeFetchStub(() => new Response(METRICS_OK, { status: 200 }), calls);
+  try {
+    await plugin.definition.setup(ctx);
+    await request.run("inv-1", () => handler("servers")!({ companyId: "company-1" }));
+    await waitFor(() => calls.some((c) => c.url === "http://m5u.local/admin/api/activity"), 2000);
+    assert.ok(stores.length >= 1, "expected the M5U token to be resolved");
+    for (const store of stores) {
+      assert.equal(store, undefined, "a poll started by a request-time load runs outside the request");
+    }
   } finally {
     globalThis.fetch = realFetch;
     await plugin.definition.onShutdown?.();

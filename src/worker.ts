@@ -43,6 +43,10 @@ let probeController: ProbeController | null = null;
 /** The company whose settings the worker received last; the host resolves a plugin's secret only with it. */
 let probeCompanyId: string | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
+/** When the worker last tried to load the saved settings on a panel request (RUK-1545). */
+let lastConfigLoadAt = 0;
+/** Minimum gap between request-time settings loads, so a failing host call is not hammered. */
+const CONFIG_RETRY_MS = 60_000;
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -166,6 +170,45 @@ function startPolling(ctx: PluginContext): void {
   });
 }
 
+/**
+ * Applies a company's settings to the worker: the poll interval, the server pollers, the Claude
+ * check settings and the company id the host needs to resolve a plugin's secret. Shared by
+ * `onConfigChanged` (a settings save or a full-start replay) and `loadSavedConfig` (a panel
+ * request after a watcher restart), so both paths configure the worker identically.
+ */
+function applyConfig(ctx: PluginContext, config: Record<string, unknown> | null, companyId: string | null): void {
+  probeCompanyId = companyId ?? probeCompanyId;
+  pollIntervalMs = readPollInterval(config);
+  configureServers(ctx, config);
+  startPolling(ctx);
+  probeSettings = resolveProbeSettings(config);
+  probeController?.configure(probeSettings.accounts, probeSettings.intervalMinutes);
+  ctx.logger.info("throughput panel config reloaded", {
+    servers: pollers.map((p) => ({
+      slot: p.setting.slot,
+      label: p.setting.label,
+      metricsUrl: p.setting.metricsUrl,
+    })),
+    pollIntervalMs,
+  });
+}
+
+/** The dev watcher restarts the worker without replaying the company's settings (RUK-1545), so a panel request that names its company loads them. */
+async function loadSavedConfig(ctx: PluginContext, params: Record<string, unknown>): Promise<void> {
+  if (probeCompanyId !== null) return;
+  const companyId = params.companyId;
+  if (typeof companyId !== "string" || companyId.length === 0) return;
+  const now = Date.now();
+  if (now - lastConfigLoadAt < CONFIG_RETRY_MS) return;
+  lastConfigLoadAt = now;
+  try {
+    const config = await ctx.config.get(companyId);
+    applyConfig(ctx, config, companyId);
+  } catch (err) {
+    ctx.logger.warn(`throughput panel could not load the saved settings for the company: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 const plugin = definePlugin({
   async setup(ctx) {
     ctxRef = ctx;
@@ -192,9 +235,10 @@ const plugin = definePlugin({
       pollIntervalMs,
     });
 
-    ctx.data.register("servers", async (): Promise<ServersSnapshot> => ({
-      servers: pollers.map((p) => p.snapshot()),
-    }));
+    ctx.data.register("servers", async (params): Promise<ServersSnapshot> => {
+      await loadSavedConfig(ctx, params);
+      return { servers: pollers.map((p) => p.snapshot()) };
+    });
 
     probeSettings = resolveProbeSettings(config);
     const controller = createProbeController({
@@ -213,6 +257,7 @@ const plugin = definePlugin({
     probeController = controller;
     // Checks spend Claude usage, so only the expanded panel (active: true) starts them.
     ctx.data.register("plan-probe", async (params) => {
+      await loadSavedConfig(ctx, params);
       if (params.active === true) runOutsideInvocation(() => void controller.kick());
       return controller.snapshot();
     });
@@ -223,20 +268,7 @@ const plugin = definePlugin({
   async onConfigChanged(newConfig, context) {
     if (ctxRef === null) return;
     try {
-      probeCompanyId = context?.companyId ?? probeCompanyId;
-      pollIntervalMs = readPollInterval(newConfig);
-      configureServers(ctxRef, newConfig);
-      startPolling(ctxRef);
-      probeSettings = resolveProbeSettings(newConfig);
-      probeController?.configure(probeSettings.accounts, probeSettings.intervalMinutes);
-      ctxRef.logger.info("throughput panel config reloaded", {
-        servers: pollers.map((p) => ({
-          slot: p.setting.slot,
-          label: p.setting.label,
-          metricsUrl: p.setting.metricsUrl,
-        })),
-        pollIntervalMs,
-      });
+      applyConfig(ctxRef, newConfig, context?.companyId ?? null);
     } catch (err) {
       ctxRef.logger.warn(
         `throughput panel config reload failed: ${
@@ -252,6 +284,8 @@ const plugin = definePlugin({
     for (const p of pollers) p.dispose();
     pollers = [];
     serverKey = "";
+    probeCompanyId = null;
+    lastConfigLoadAt = 0;
   },
 
   async onHealth() {
