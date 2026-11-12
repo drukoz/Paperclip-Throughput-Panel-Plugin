@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const outDir = resolve(here, "out");
 const page = `file://${resolve(here, "harness.html")}`;
 const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-/** A blank 390x844 PNG is well over this, so a smaller file means a broken shot. */
+/** A blank 500x844 PNG is well over this, so a smaller file means a broken shot. */
 const MIN_BYTES = 5_000;
 /** Makes `(pointer: coarse)` match, i.e. a touch screen (measured on this Mac). */
 const TOUCH_FLAGS = [
@@ -36,8 +36,9 @@ await esbuild.build({
 });
 
 const shots = [
-  { file: "phone-expanded.png", window: "390,844", touch: true, collapsed: false },
-  { file: "phone-collapsed.png", window: "390,844", touch: true, collapsed: true },
+  // Headless Chrome lays out at least ~480 px wide; a 390 px canvas cut the card off.
+  { file: "phone-expanded.png", window: "500,844", touch: true, collapsed: false },
+  { file: "phone-collapsed.png", window: "500,844", touch: true, collapsed: true },
   { file: "desktop-expanded.png", window: "1280,800", touch: false, collapsed: false },
   { file: "desktop-collapsed.png", window: "1280,800", touch: false, collapsed: true },
 ];
