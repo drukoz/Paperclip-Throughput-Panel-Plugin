@@ -79,7 +79,8 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 
 ## Branches and delivery
 
-- There is no GitHub remote; nothing is pushed anywhere. `main` holds only the initial commit.
+- GitHub remote `origin`: `drukoz/Paperclip-Throughput-Panel-Plugin` (private), default branch `main`. Never push to `main` and never force-push; changes reach `main` only through a pull request the user merges.
+- Since 2026-11-12 `feature/ruk-19-throughput-panel` is pushed to `origin`, and pull request #1 proposes it into `main`. After a merge into it, push it (`git push origin feature/ruk-19-throughput-panel`) so the pull request stays current.
 - The live plugin is built from `feature/ruk-19-throughput-panel`, which is checked out in the `_default` checkout.
 - Each parent task gets its own branch from it, for example `feature/ruk-249-claude-plan-usage`. Each subtask works in its own git worktree under `/Volumes/Storage/paperclip/worktrees/paperclip-throughput-panel/`, on a branch named `<feature-branch>-RUK-<n>`. Commit on the worktree's current branch; never switch or create branches.
 - On Paperclip 2026.1029.0-nightly.1 a new worktree for this repository comes up as an empty folder, so subtasks reuse the six worktrees `feature/ruk-249-claude-plan-usage-RUK-250` to `-RUK-255`. Their branch names carry old task names; each spec's Setup fast-forwards the branch to the feature branch first, and every merge commit names its task: `Merge <branch> (RUK-n)`.
