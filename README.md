@@ -20,7 +20,11 @@ Each model block shows:
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`
 - An explicit unreachable state, per server, when that server's endpoint cannot be reached
-- Claude plan usage for your default Claude subscription: how much of the current 5-hour session, the weekly limit and the weekly Fable limit is used, with the reset time on hover
+- Claude plan usage for your default Claude subscription: how much of the current 5-hour session, the weekly limit and the weekly Fable limit is used, with the reset time on hover (on a touch screen, tap the bar)
+
+### On a phone
+
+Paperclip places the panel in its overlay container, so on screens narrower than 768 px the pill and the card sit above Paperclip's bottom navigation instead of covering it, and on a desktop the panel stays 16 px from the bottom-right corner. On a phone the expanded card is no taller than the visible screen above the navigation, and it scrolls inside itself without scrolling the page behind it. On a touch screen (`pointer: coarse`) the window buttons, the collapse and ↻ buttons are at least 36 px tall, and each Claude bar is a button: tap it to show or hide its reset time and the age and source of its reading. A desktop with a mouse looks the same as before. `npm run harness` renders the real panel inside a copy of Paperclip's overlay container and bottom navigation and saves phone-size (touch) and desktop screenshots to `scripts/mobile-harness/out/`.
 
 ## How it works
 
@@ -294,7 +298,7 @@ src/
 
 ## Scope and limits
 
-- The panel is fixed bottom-right; it is not draggable or resizable.
+- The panel sits in the bottom-right corner, where Paperclip's overlay container puts it; it is not draggable or resizable. On a phone it stays a 232 px corner card rather than going full width.
 - The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started; the average-window selector does not affect them.
 - oMLX (the M5U) publishes no TTFT, KV cache or MTP numbers, so those read `—` in its blocks, and its prefix-cache hit rate is server-wide — `total_cached_tokens / total_prompt_tokens` — not per model.
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.

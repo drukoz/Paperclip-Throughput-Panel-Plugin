@@ -55,6 +55,7 @@ Run from the repository root (in a worktree, its root). Node is 24.22 (`/opt/hom
 | `npm run typecheck` | `tsc --noEmit` | no output, exit 0 |
 | `npm test` | `node --test`: runs every `*.test.ts` under the current folder | `fail 0` |
 | `npm run build` | writes `dist/worker.js`, `dist/manifest.js`, `dist/ui/index.js` | three `built ...` lines |
+| `npm run harness` | bundles the real panel into `scripts/mobile-harness/`'s static page and saves phone (500×844, touch emulated) and desktop screenshots to `scripts/mobile-harness/out/` (git-ignored) with headless Chrome | four `<name>.png: <bytes> bytes` lines, exit 0 |
 
 There is no linter and no formatter; match the surrounding code (2-space indent, double quotes, semicolons, trailing commas).
 
