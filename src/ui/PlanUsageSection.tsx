@@ -1,6 +1,9 @@
+import { useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
 import type { PlanUsageRow, PlanUsageView } from "../usage/types.ts";
 import { formatAge, formatPct, isWindowRestarted, meterDetails, usageColor } from "./format.ts";
+import type { PanelLayout } from "./layout.ts";
+import { TOUCH_TARGET_PX, tapTargetStyle } from "./layout.ts";
 
 const MUTED = "rgba(250,250,250,0.55)";
 
@@ -27,27 +30,9 @@ const errMsg: CSSProperties = {
   WebkitBoxOrient: "vertical",
 };
 
-function MeterRow({
-  label,
-  row,
-  now,
-}: {
-  label: string;
-  row: PlanUsageRow | null;
-  now?: number;
-}) {
-  const ref = now ?? Date.now();
-  const shown = row !== null && !isWindowRestarted(row.resetsAt, ref) ? row : null;
-  const details = meterDetails(label, row, ref);
+function MeterBar({ label, shown }: { label: string; shown: PlanUsageRow | null }): ReactElement {
   return (
-    // Screen readers ignore aria-label on a role-less div; "img" makes them
-    // read the full sentence, reset time included, instead of the bare cells.
-    <div
-      role="img"
-      style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}
-      title={details}
-      aria-label={details}
-    >
+    <>
       <span style={{ color: MUTED, width: 72, flexShrink: 0 }}>{label}</span>
       <span
         style={{
@@ -72,6 +57,56 @@ function MeterRow({
       <span style={{ width: 34, textAlign: "right" }}>
         {shown ? formatPct(shown.usedPercent) : "—"}
       </span>
+    </>
+  );
+}
+
+function MeterRow({
+  label,
+  row,
+  now,
+  tapForDetails,
+}: {
+  label: string;
+  row: PlanUsageRow | null;
+  now?: number;
+  tapForDetails: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = now ?? Date.now();
+  const shown = row !== null && !isWindowRestarted(row.resetsAt, ref) ? row : null;
+  const details = meterDetails(label, row, ref);
+  if (!tapForDetails) {
+    return (
+      // Screen readers ignore aria-label on a role-less div; "img" makes them
+      // read the full sentence, reset time included, instead of the bare cells.
+      <div
+        role="img"
+        style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}
+        title={details}
+        aria-label={details}
+      >
+        <MeterBar label={label} shown={shown} />
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 3 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        aria-label={details}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, width: "100%", minHeight: TOUCH_TARGET_PX,
+          background: "transparent", border: "none", color: "inherit", font: "inherit",
+          padding: 0, margin: 0, cursor: "pointer", textAlign: "left",
+        }}
+      >
+        <MeterBar label={label} shown={shown} />
+      </button>
+      {/* 78 = the 72 px label + the 6 px gap, so the text lines up under the bar. */}
+      {open ? <div style={{ color: MUTED, fontSize: 10, marginLeft: 78 }}>{details}</div> : null}
     </div>
   );
 }
@@ -88,8 +123,12 @@ export function PlanUsageSection(props: {
   now?: number;
   heading?: string;
   showFable?: boolean;
+  /** Sizes for the current screen; desktop sizes when omitted. */
+  layout?: PanelLayout;
 }): ReactElement {
   const { view, onRefresh, now } = props;
+  const minTarget = props.layout?.minTarget ?? 0;
+  const tapForDetails = props.layout?.tapForDetails ?? false;
   const heading = props.heading ?? "Claude plan";
   const accountLabel =
     view.kind === "ok" || view.kind === "needs_attention"
@@ -120,7 +159,7 @@ export function PlanUsageSection(props: {
             onClick={onRefresh}
             aria-label="Refresh Claude usage"
             title="Refresh Claude usage"
-            style={{ ...collapseBtn, fontSize: 12 }}
+            style={{ ...collapseBtn, fontSize: 12, ...tapTargetStyle(minTarget) }}
           >
             ↻
           </button>
@@ -128,10 +167,10 @@ export function PlanUsageSection(props: {
       </div>
       {view.kind === "ok" ? (
         <>
-          <MeterRow label="5h session" row={view.usage.session} now={now} />
-          <MeterRow label="Weekly" row={view.usage.weekly} now={now} />
+          <MeterRow label="5h session" row={view.usage.session} now={now} tapForDetails={tapForDetails} />
+          <MeterRow label="Weekly" row={view.usage.weekly} now={now} tapForDetails={tapForDetails} />
           {props.showFable !== false ? (
-            <MeterRow label="Fable weekly" row={view.usage.fable} now={now} />
+            <MeterRow label="Fable weekly" row={view.usage.fable} now={now} tapForDetails={tapForDetails} />
           ) : null}
           {view.refreshError !== null ? (
             <div style={errMsg}>{view.refreshError}</div>
