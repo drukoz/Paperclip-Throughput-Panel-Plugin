@@ -25,6 +25,9 @@ import { PlanUsageSection } from "./PlanUsageSection.tsx";
 import { usePlanUsage } from "./usePlanUsage.ts";
 import { useProbeUsage } from "./useProbeUsage.ts";
 import { probeAccountView } from "../usage/probe-view.ts";
+import type { PanelLayout } from "./layout.ts";
+import { panelLayout, tapTargetStyle } from "./layout.ts";
+import { useViewport } from "./useMediaQuery.ts";
 
 const COLLAPSED_KEY = "rukoz.throughput-panel.collapsed";
 const WINDOW_KEY = "rukoz.throughput-panel.window";
@@ -267,9 +270,11 @@ function SparklineBlock({
 function WindowSelector({
   selected,
   onSelect,
+  layout,
 }: {
   selected: AverageWindowKey;
   onSelect: (key: AverageWindowKey) => void;
+  layout: PanelLayout;
 }) {
   return (
     <div
@@ -283,7 +288,12 @@ function WindowSelector({
           type="button"
           onClick={() => onSelect(key)}
           aria-pressed={key === selected}
-          style={key === selected ? windowBtnOn : windowBtn}
+          style={{
+            ...(key === selected ? windowBtnOn : windowBtn),
+            fontSize: layout.windowButtonFontSize,
+            padding: layout.windowButtonPadding,
+            ...tapTargetStyle(layout.minTarget),
+          }}
         >
           {key}
         </button>
@@ -313,6 +323,8 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
     const id = setInterval(() => refresh(), 5000);
     return () => clearInterval(id);
   }, [refresh]);
+
+  const layout = panelLayout(useViewport());
 
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -375,11 +387,12 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
             view={view}
             onRefresh={probe.refresh}
             showFable={view.kind === "ok" && view.usage.fable !== null}
+            layout={layout}
           />
         );
       })
     ) : (
-      <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} />
+      <PlanUsageSection view={planUsage.view} onRefresh={planUsage.refresh} layout={layout} />
     );
 
   let compact: { color: string; title: string; text: string; message?: string };
@@ -418,15 +431,8 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
   );
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 16,
-        right: 16,
-        zIndex: 40,
-        pointerEvents: "none",
-      }}
-    >
+    // Paperclip's overlay container places us: 16px from the corner on desktop, above its bottom nav on phones.
+    <div style={{ pointerEvents: "none" }}>
       {showCompact ? (
         hasRichData ? (
           <button
@@ -434,7 +440,13 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
             onClick={toggleCollapsed}
             aria-expanded={false}
             aria-label="Expand throughput panel"
-            style={{ ...pillCard, cursor: "pointer" }}
+            style={{
+              ...pillCard,
+              cursor: "pointer",
+              ...(layout.minTarget > 0
+                ? { minHeight: layout.minTarget, justifyContent: "center" }
+                : {}),
+            }}
           >
             {pillBody}
           </button>
@@ -457,8 +469,9 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
               ...baseCard,
               width: 232,
               padding: "8px 10px",
-              maxHeight: "calc(100vh - 32px)",
+              maxHeight: layout.cardMaxHeight,
               overflowY: "auto",
+              overscrollBehavior: "contain",
             }}
           >
             <div
@@ -479,13 +492,13 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
                 onClick={toggleCollapsed}
                 aria-expanded={true}
                 aria-label="Collapse throughput panel"
-                style={collapseBtn}
+                style={{ ...collapseBtn, ...tapTargetStyle(layout.minTarget) }}
               >
                 –
               </button>
             </div>
 
-            <WindowSelector selected={windowKey} onSelect={selectWindow} />
+            <WindowSelector selected={windowKey} onSelect={selectWindow} layout={layout} />
             {data.servers.map((server) => (
               <ServerSection key={server.slot} server={server} windowKey={windowKey} />
             ))}
