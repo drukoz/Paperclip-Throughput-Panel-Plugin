@@ -20,8 +20,8 @@ export interface ProbeUsageHandle {
  * starts any check that is due; otherwise it only reads, so a collapsed panel
  * spends no Claude usage.
  */
-export function useProbeUsage(active: boolean): ProbeUsageHandle {
-  const { data, error, refresh } = usePluginData<PlanProbeSnapshot>("plan-probe", { active });
+export function useProbeUsage(active: boolean, companyId: string | null): ProbeUsageHandle {
+  const { data, error, refresh } = usePluginData<PlanProbeSnapshot>("plan-probe", { active, companyId });
 
   useEffect(() => {
     if (!active) return;

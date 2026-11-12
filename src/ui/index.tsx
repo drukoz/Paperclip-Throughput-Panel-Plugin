@@ -317,7 +317,7 @@ function serverBreakdown(servers: ServerSnapshot[]): string {
 }
 
 export function ThroughputPanel({ context }: PluginWidgetProps) {
-  const { data, error, refresh } = usePluginData<ServersSnapshot>("servers");
+  const { data, error, refresh } = usePluginData<ServersSnapshot>("servers", { companyId: context.companyId });
 
   useEffect(() => {
     const id = setInterval(() => refresh(), 5000);
@@ -372,7 +372,7 @@ export function ThroughputPanel({ context }: PluginWidgetProps) {
   // Claude usage is checked only while the card is expanded. With Claude accounts in the
   // plugin settings the worker checks each one (useProbeUsage, RUK-518); otherwise, or while
   // an older worker without that handler runs, the default subscription (usePlanUsage, RUK-249).
-  const probe = useProbeUsage(!showCompact);
+  const probe = useProbeUsage(!showCompact, context.companyId);
   const probeAccounts = probe.snapshot?.accounts ?? [];
   const useDefaultSubscription = probe.failed || (probe.snapshot !== null && probeAccounts.length === 0);
   const planUsage = usePlanUsage(context.companyId, !showCompact && useDefaultSubscription);
