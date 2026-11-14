@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ProbeAccountState, ProbeObservation } from "./probe-types.ts";
-import { LIMIT_REACHED_NOTE, WEEKLY_ONLY_NOTE, probeAccountView, probeNote } from "./probe-view.ts";
+import { LIMIT_REACHED_NOTE, probeAccountView, probeNote } from "./probe-view.ts";
 
 const AT = "2026-11-04T01:13:44.704Z";
 
@@ -44,7 +44,7 @@ test("an observed account is an ok view with source probe on every meter", () =>
     },
     accountLabel: "A",
     checkedAt: AT,
-    refreshError: WEEKLY_ONLY_NOTE,
+    refreshError: null,
   });
 });
 

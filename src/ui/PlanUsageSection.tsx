@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
-import type { PlanUsageRow, PlanUsageView } from "../usage/types.ts";
-import { formatAge, formatPct, isWindowRestarted, meterDetails, usageColor } from "./format.ts";
+import type { PlanUsage, PlanUsageRow, PlanUsageView } from "../usage/types.ts";
+import { formatAge, formatPct, formatResetAt, isWindowRestarted, meterDetails, nextResetAt, resetDetails, usageColor } from "./format.ts";
 import type { PanelLayout } from "./layout.ts";
 import { TOUCH_TARGET_PX, tapTargetStyle } from "./layout.ts";
 
@@ -111,9 +111,31 @@ function MeterRow({
   );
 }
 
+/** The weekly limit's reset date and time, in the viewer's zone, 24-hour. */
+function ResetRow({ usage, now }: { usage: PlanUsage; now?: number }): ReactElement {
+  const ref = now ?? Date.now();
+  const resetsAt = nextResetAt(usage, ref);
+  const details = resetDetails(resetsAt, ref);
+  return (
+    // role="img" so screen readers read the full sentence, as in MeterRow.
+    <div
+      role="img"
+      title={details}
+      aria-label={details}
+      style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}
+    >
+      <span style={{ color: MUTED, width: 72, flexShrink: 0 }}>Resets</span>
+      <span style={{ flex: 1, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+        {formatResetAt(resetsAt)}
+      </span>
+    </div>
+  );
+}
+
 /**
- * The panel's "Claude plan" section: the 5-hour session, weekly and Fable
- * weekly meters, or the reason they are missing. Presentational only.
+ * The panel's "Claude plan" section: the weekly limit's reset date and time,
+ * the weekly and Fable weekly meters, or the reason they are missing.
+ * Presentational only.
  * `heading` replaces the "Claude plan" title (one section per checked account);
  * `showFable: false` hides the Fable row.
  */
@@ -167,7 +189,7 @@ export function PlanUsageSection(props: {
       </div>
       {view.kind === "ok" ? (
         <>
-          <MeterRow label="5h session" row={view.usage.session} now={now} tapForDetails={tapForDetails} />
+          <ResetRow usage={view.usage} now={now} />
           <MeterRow label="Weekly" row={view.usage.weekly} now={now} tapForDetails={tapForDetails} />
           {props.showFable !== false ? (
             <MeterRow label="Fable weekly" row={view.usage.fable} now={now} tapForDetails={tapForDetails} />
