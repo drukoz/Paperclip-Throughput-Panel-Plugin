@@ -3,8 +3,6 @@ import type { PlanUsageRow, PlanUsageView } from "./types.ts";
 
 /** Note under a blocked account's meters. */
 export const LIMIT_REACHED_NOTE = "Limit reached: Claude is blocked on this account until the reset";
-/** Note when Anthropic reported the weekly window but not the 5-hour one. */
-export const WEEKLY_ONLY_NOTE = "Anthropic reports only the weekly limit right now";
 
 /** The one-line note under an account's meters, or null when none is needed. */
 export function probeNote(state: ProbeAccountState): string | null {
@@ -12,7 +10,6 @@ export function probeNote(state: ProbeAccountState): string | null {
   const last = state.last;
   if (last === null) return null;
   if (last.status === "rejected") return LIMIT_REACHED_NOTE;
-  if (last.reading.usage.session === null && last.reading.usage.weekly !== null) return WEEKLY_ONLY_NOTE;
   return null;
 }
 
