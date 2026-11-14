@@ -4,5 +4,7 @@ scripts/mobile-harness/out/
 *.log
 # Paperclip run data (agent home, OpenCode snapshots); never commit it
 .paperclip-runtime/
+# Paperclip's subtask worktrees inside the project clone
+.paperclip/
 # Local Claude Code settings
 .claude/settings.local.json
