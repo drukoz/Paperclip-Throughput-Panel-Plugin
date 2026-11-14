@@ -2,7 +2,7 @@
 
 ## What it is
 
-A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM, llama.cpp or **oMLX** — as a small floating panel in the Paperclip UI. The third is the M5U: a Mac on the LAN running oMLX 0.7.4.dev1 ([github.com/jundot/omlx](https://github.com/jundot/omlx)), serving `swift15-oq8e`, which this Mac reaches at `http://127.0.0.1:18083` through the launchd forwarder `com.drukoz.llm-forward-m5u` (→ `192.168.1.183:8081`). A worker on the Paperclip host reads Prometheus metrics from vLLM and llama.cpp, and oMLX's JSON activity and status routes, and tells the formats apart by their metric names (`vllm:…` / `llamacpp:…`) or by an oMLX activity body; the panel's kind label for that server reads `oMLX`. The plugin id is `rukoz.throughput-panel`.
+A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM, llama.cpp or **oMLX** — as a small floating panel in the Paperclip UI. The third is the M5U: a Mac on the LAN running oMLX 0.7.4.dev1 ([github.com/jundot/omlx](https://github.com/jundot/omlx)), serving `swift15-oq8e`, which this Mac reaches at `http://127.0.0.1:18083` through the launchd forwarder `com.drukoz.llm-forward-m5u` (to port 8081 on the M5U). A worker on the Paperclip host reads Prometheus metrics from vLLM and llama.cpp, and oMLX's JSON activity and status routes, and tells the formats apart by their metric names (`vllm:…` / `llamacpp:…`) or by an oMLX activity body; the panel's kind label for that server reads `oMLX`. The plugin id is `rukoz.throughput-panel`.
 
 oMLX has no Prometheus `/metrics` endpoint — it answers 404 — so the worker reads two JSON routes instead: `GET /admin/api/activity`, the live rows of every request being prefilled or generated, per loaded model, and `GET /api/status`, the session totals of prompt, completion and cached tokens. oMLX adds a request's tokens to those totals only when the request finishes, so the worker computes live tok/s from the activity rows (each request's growing `generated_tokens`) and uses the totals for the tokens a request produced after the last poll, and for the cache hit rate.
 
@@ -101,7 +101,7 @@ Configuration is company-scoped. There are two ways to set it:
 | `modelName` | string | *(none)* | Server 1's model filter: show only this `model_name`. Blank shows every model the server serves. |
 | `server2Label` | string | `A9 Mega` | Server 2's label, shown in the panel. |
 | `server2MetricsUrl` | string | `http://127.0.0.1:18082/metrics` | Server 2's Prometheus `/metrics` endpoint — the A9 Mega (Strix Halo). Save it empty to hide this server. |
-| `server2Token` | secret | *(built-in A9 metrics key)* | Server 2's bearer token. Leave it empty for the A9 Mega: the plugin has its read-only metrics key built in. |
+| `server2Token` | secret | *(none)* | Server 2's bearer token. The A9 Mega needs one: its read-only metrics key, stored as a Paperclip secret. |
 | `server3Label` | string | `M5U` | Server 3's label, shown in the panel. |
 | `server3MetricsUrl` | string | `http://127.0.0.1:18083/admin/api/activity` | The M5U's oMLX activity route; save it empty to hide this server. |
 | `server3Token` | secret | *(none)* | oMLX's main API key; no built-in key. |
@@ -113,7 +113,7 @@ Configuration is company-scoped. There are two ways to set it:
 
 A server slot is enabled when its metrics URL, after defaults, is a non-blank string: server 1 is always on; server 2 is on unless `server2MetricsUrl` is saved as an empty string; server 3 is on unless `server3MetricsUrl` is saved as an empty string.
 
-The current hpcserver endpoint answers with HTTP 200 and no `Authorization` header, so `authToken` is optional — the plugin sends a token to a server only when that server has one configured. The A9 Mega is behind Caddy, which answers 401 to every request without `Authorization: Bearer <key>`, so the plugin sends its built-in read-only A9 metrics key there (Caddy accepts that key only for `/metrics` and `/v1/models`). `server2Token`, when set, replaces it.
+The current hpcserver endpoint answers with HTTP 200 and no `Authorization` header, so `authToken` is optional — the plugin sends a token to a server only when that server has one configured. The A9 Mega is behind Caddy, which answers 401 to every request without `Authorization: Bearer <key>`, so set `server2Token` to the A9's read-only metrics key (Caddy accepts that key only for `/metrics` and `/v1/models`). The plugin has no built-in key for any server.
 
 ### The token
 
@@ -125,11 +125,11 @@ For the config route, the `authToken` value may be either a literal string or a 
 { "type": "secret_ref", "secretId": "<uuid>" }
 ```
 
-The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.** The one exception is the A9 Mega's read-only metrics key in `src/servers.ts` (see `CLAUDE.md`).
+The secret reference is the recommended form. The plugin resolves it at call time for each poll, keeps the resolved value in memory only, and never caches or logs it. **Never commit a token, API key, or secret value to this repository.**
 
-Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. The A9 Mega needs nothing here: with **Server 2: token** empty and the default URL, the plugin sends its built-in read-only metrics key. Set the field only to use a different key; if you point server 2 at another URL, the built-in key is not sent.
+Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. The A9 Mega needs **Server 2: token**: pick the Paperclip secret that holds the A9's read-only metrics key, or press **+** to store it as a new secret. With the field empty, the A9's section shows `HTTP 401`.
 
-The M5U is the opposite: **Server 3: token** has no built-in key, and it must be oMLX's **main** API key. oMLX's activity route is an admin route, so the main key is required there and a sub-key is answered `401`; `/api/status` accepts any key. Pick the Paperclip secret the M5U AI connection uses, if that secret holds oMLX's main key, or press **+** to store the main key as a new secret. The main key also allows inference and every oMLX admin action — unloading models, restarting the server, changing settings — so the plugin limits it narrowly: it sends it only with `GET` to the two oMLX routes on that server, the configured `server3MetricsUrl` and the same server's `/api/status`, and never logs, stores or shows it.
+The M5U needs **Server 3: token**, and it must be oMLX's **main** API key. oMLX's activity route is an admin route, so the main key is required there and a sub-key is answered `401`; `/api/status` accepts any key. Pick the Paperclip secret the M5U AI connection uses, if that secret holds oMLX's main key, or press **+** to store the main key as a new secret. The main key also allows inference and every oMLX admin action — unloading models, restarting the server, changing settings — so the plugin limits it narrowly: it sends it only with `GET` to the two oMLX routes on that server, the configured `server3MetricsUrl` and the same server's `/api/status`, and never logs, stores or shows it.
 
 ### Claude accounts
 

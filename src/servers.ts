@@ -40,14 +40,6 @@ const A9_METRICS_URL = "http://127.0.0.1:18082/metrics";
 /** Server 3's default endpoint: the M5U's oMLX activity route, through the launchd forwarder `com.drukoz.llm-forward-m5u`. */
 const M5U_ACTIVITY_URL = "http://127.0.0.1:18083/admin/api/activity";
 
-/**
- * The A9 Mega's read-only metrics key, hard-coded at the owner's request (RUK-869) so the A9 works with no
- * settings. Caddy on the A9 accepts it only for `/metrics` and `/v1/models`, never for inference
- * (`A9_METRICS_KEY` in `/etc/caddy/a9-llm.env`). It is sent only to the default A9 URL; a `server2Token`
- * setting overrides it. To rotate it, change it on the A9 and here together.
- */
-const A9_METRICS_KEY = "96de6fb9fb1af39350a3f35979edae48a3fda452d427f17f56ae78db8c792b67";
-
 /** The enabled servers in slot order, from the config table in the contract. */
 export function resolveServers(
   config: Record<string, unknown> | null,
@@ -73,7 +65,7 @@ export function resolveServers(
       slot: 2,
       label: nonBlankString(cfg.server2Label) ?? "A9 Mega",
       metricsUrl: url2,
-      token: normalizeToken(cfg.server2Token) ?? (url2 === A9_METRICS_URL ? A9_METRICS_KEY : null),
+      token: normalizeToken(cfg.server2Token),
       modelName: null,
     });
   }
