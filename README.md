@@ -20,7 +20,7 @@ Each model block shows:
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`
 - An explicit unreachable state, per server, when that server's endpoint cannot be reached
-- Claude plan usage for your default Claude subscription: how much of the current 5-hour session, the weekly limit and the weekly Fable limit is used, with the reset time on hover (on a touch screen, tap the bar)
+- Claude plan usage for your default Claude subscription: when the weekly limit resets (date and 24-hour time in your own time zone), and how much of the weekly limit and the weekly Fable limit is used, with the time left until the reset on hover (on a touch screen, tap the bar)
 
 ### On a phone
 
@@ -142,7 +142,7 @@ To set up an account:
 3. Set **Claude account N: label**, for example the account's email address, and save the settings.
 4. A build that changes the worker reaches it only after you disable and re-enable the plugin once (`paperclipai plugin disable rukoz.throughput-panel`, then `paperclipai plugin enable rukoz.throughput-panel`). A page reload alone loads only the panel.
 
-What the bars can show: Anthropic reports only the window closest to its limit. Since 31 October 2026 that has usually been the weekly window, so the 5-hour bar shows "—" with the note "Anthropic reports only the weekly limit right now". Fable's weekly window is not reported for these tokens, so its row is hidden. Hover a bar for its reset time and age.
+What each section shows: the first row, **Resets**, is when the weekly limit resets, as a date and 24-hour time in your browser's time zone (for example `Thu 5 Nov 16:00`). It shows `—` until a reading carries a reset time, and again once that time has passed, until a newer reading arrives. Below it are the weekly bar and, when Anthropic reports it, the Fable weekly bar. The panel does not show the 5-hour session: Anthropic reports only the window closest to its limit, and since 31 October 2026 that has usually been the weekly one. Fable's weekly window is not reported for these tokens, so its row is hidden. Hover a bar for its reset time and age.
 
 | Message under an account | Meaning |
 | --- | --- |
@@ -250,7 +250,7 @@ paperclipai connect --persona board
   paperclipai plugin enable rukoz.throughput-panel
   ```
 - **The Claude plan section says "No Claude subscription connected" or asks you to reconnect.** Open AI connections in Paperclip and connect or reconnect your Claude subscription. The section follows on its next usage check, at most 15 minutes later; ↻ checks at once if the last check is at least 5 minutes old.
-- **The Claude plan note says Anthropic is rate-limiting usage checks.** The 5h and weekly bars keep updating from agent runs; only the Fable bar waits for the next successful check, at most 30 minutes later. Nothing needs doing.
+- **The Claude plan note says Anthropic is rate-limiting usage checks.** The reset time and the weekly bar keep updating from agent runs; only the Fable bar waits for the next successful check, at most 30 minutes later. Nothing needs doing.
 - **The model server restarted and the panel stopped updating.** The worker recovers on its own: a failed poll is caught, `lastError` is set, and the next interval retries — the poll loop is never torn down by a failed scrape. A counter reset (which is what a vLLM restart looks like, because the cumulative counters drop) clears the sample window, so rates read `—` for one poll and refill within about 10 s (two poll cycles); this is the same behaviour noted in [Scope and limits](#scope-and-limits) below. If the plugin **worker process** was replaced (a host restart, or the worker being respawned), an already-open browser tab can keep showing the snapshot it last received — **reload the browser page** to re-establish the UI data bridge. Reloading the page is the first thing to try, and it is cheaper than a disable/enable cycle. Only if a page reload does not help is a disable/enable cycle warranted, and the logs (`paperclipai plugin logs rukoz.throughput-panel`) are the place to look.
 - **Panel shows `—` for everything.** Fewer than two samples are in the window yet, so no rate can be computed. Wait about 10 s (two poll cycles) and it should fill in.
 - **Selecting 15m right after the worker starts shows a smaller average.** The worker averages over whatever history it has retained so far, so before 15 minutes have accumulated the readout covers that shorter span — the average's tooltip says how many seconds of history it has. The graph fills in over the following minutes as more samples arrive.
@@ -304,5 +304,5 @@ src/
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
 - The windowed average skips intervals with no tokens, so it is an average of active throughput, not of wall-clock time; a window in which nothing ran at all reads `0`. The instantaneous readout and the sparkline are not filtered this way.
 - Claude plan usage is shown only in the expanded card, not in the collapsed pill.
-- The Fable row comes only from Anthropic's usage check: it shows `—` until a check succeeds, or when the account has no Fable window. The 5h and weekly rows are as fresh as the newer of the last Claude call an agent made through Paperclip and the last successful usage check. A bar whose window has reset since its reading shows `—`.
+- The Fable row comes only from Anthropic's usage check: it shows `—` until a check succeeds, or when the account has no Fable window. The Resets and weekly rows are as fresh as the newer of the last Claude call an agent made through Paperclip and the last successful usage check. A bar whose window has reset since its reading shows `—`, and so does the Resets row.
 - With several Claude subscriptions connected, the section shows your default one, as set in Paperclip's AI connections.

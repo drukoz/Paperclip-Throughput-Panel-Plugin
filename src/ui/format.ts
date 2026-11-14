@@ -1,4 +1,4 @@
-import type { PlanUsageRow, PlanUsageSource } from "../usage/types.ts";
+import type { PlanUsage, PlanUsageRow, PlanUsageSource } from "../usage/types.ts";
 
 /** Placeholder for every missing value (em dash, U+2014). */
 const DASH = "—";
@@ -64,6 +64,28 @@ export function formatResetIn(iso: string | null, now?: number): string {
   return `resets in ${days}d ${restHours}h`;
 }
 
+/**
+ * ISO time -> "Thu 5 Nov 16:00": short weekday, day, short month and 24-hour
+ * time in `timeZone` (default: the viewer's own zone). Null / unparseable -> "—".
+ */
+export function formatResetAt(iso: string | null, timeZone?: string): string {
+  if (iso === null) return DASH;
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return DASH;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).formatToParts(new Date(parsed));
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("weekday")} ${part("day")} ${part("month")} ${part("hour")}:${part("minute")}`;
+}
+
 /** Meter colour for a percent used: >= 90 red, >= 75 amber, else green. */
 export function usageColor(usedPercent: number): string {
   if (usedPercent >= 90) return "#ef4444";
@@ -98,4 +120,24 @@ export function meterDetails(label: string, row: PlanUsageRow | null, now: numbe
     return `${base}, as of ${formatAge(row.at, now)} ${formatSource(row.source)}`;
   }
   return base;
+}
+
+/**
+ * The reset time the "Resets" row shows: the weekly window's, or the Fable
+ * window's when weekly is missing. Null when that time is missing,
+ * unparseable or already past at `now` (epoch ms).
+ */
+export function nextResetAt(usage: PlanUsage, now: number): string | null {
+  const row = usage.weekly ?? usage.fable;
+  if (row === null) return null;
+  if (row.resetsAt === null) return null;
+  if (!Number.isFinite(Date.parse(row.resetsAt))) return null;
+  if (isWindowRestarted(row.resetsAt, now)) return null;
+  return row.resetsAt;
+}
+
+/** The tooltip and screen-reader sentence for the "Resets" row. */
+export function resetDetails(resetsAt: string | null, now: number, timeZone?: string): string {
+  if (resetsAt === null) return "Weekly limit: next reset time not known yet";
+  return `Weekly limit ${formatResetIn(resetsAt, now)}, on ${formatResetAt(resetsAt, timeZone)}`;
 }

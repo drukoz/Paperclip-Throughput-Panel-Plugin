@@ -10,7 +10,7 @@ import manifest from "../manifest.ts";
 import { runProbe } from "./probe-run.ts";
 import { parseProbeOutput } from "./probe-parse.ts";
 import { createProbeController } from "./probe-controller.ts";
-import { probeAccountView, WEEKLY_ONLY_NOTE } from "./probe-view.ts";
+import { probeAccountView } from "./probe-view.ts";
 import type { PlanProbeSnapshot, ProbeAccountState } from "./probe-types.ts";
 
 const FAKE = fileURLToPath(new URL("./fixtures/fake-claude.mjs", import.meta.url));
@@ -120,7 +120,7 @@ test("a working account ends as an ok view with the weekly meter", async () => {
     assert.equal(view.usage.weekly?.usedPercent, 96);
     assert.equal(view.usage.weekly?.source, "probe");
     assert.equal(view.usage.session, null);
-    assert.equal(view.refreshError, WEEKLY_ONLY_NOTE);
+    assert.equal(view.refreshError, null);
   }
 });
 

@@ -5,10 +5,10 @@
 A Paperclip plugin, id `rukoz.throughput-panel`, that puts a small floating panel in the bottom-right corner of every signed-in Paperclip page. The panel shows:
 
 - the live tokens/sec of every model on each configured model server (up to three: hpcserver's vLLM at `127.0.0.1:18081`, the A9 Mega at `127.0.0.1:18082`, the M5U at `127.0.0.1:18083`, from RUK-949), read by the plugin worker; per model: tok/s, window average, per-request tok/s, TTFT, requests, caches;
-- the Claude plan usage (5-hour session, weekly, weekly Fable) of the user's Claude accounts, from one of two sources:
+- the Claude plan usage of the user's Claude accounts: a "Resets" row with the weekly limit's reset date and time (24-hour, in the viewer's time zone; RUK-1950 put it where the 5-hour session bar was), the weekly bar and the weekly Fable bar, from one of two sources:
   - from RUK-518 on, when Claude accounts are set in the plugin settings: one "Claude · <label>" section per account. The worker runs a tiny Claude Code request for each account (the "check", in `src/usage/probe-*.ts`) and reads the `rate_limit_event` Claude Code prints. Only while the panel is expanded, at most every `claudeCheckMinutes` per account.
   - otherwise (RUK-249): one "Claude plan" section for the signed-in user's default Claude subscription, read by the panel itself from Paperclip's API: the `rate_limit_event` lines in `claude_local` agent run logs, plus Anthropic's usage check through Paperclip's AI-connection usage route.
-- Anthropic reports less than these sections can show. Since 2026-10-31 02:55 UTC, Claude Code's `rate_limit_event` for our account carries only the limiting window (`seven_day`), not `five_hour`. A Paperclip sign-in (`claude setup-token`) cannot read the usage route at all: it answers 403. So a missing 5-hour or Fable bar is normal; the panel says so instead of guessing. Upstream: paperclipai/paperclip#18911.
+- Anthropic reports less than these sections can show. Since 2026-10-31 02:55 UTC, Claude Code's `rate_limit_event` for our account carries only the limiting window (`seven_day`), not `five_hour`. A Paperclip sign-in (`claude setup-token`) cannot read the usage route at all: it answers 403. So a missing Fable bar is normal, and the panel no longer shows the 5-hour window at all (RUK-1950); the data layer still reads it. When a reading has no reset time, or it has passed, the Resets row shows `—` instead of guessing. Upstream: paperclipai/paperclip#18911.
 
 Its one user is the board operator who owns this Paperclip instance and watches the agents work. `README.md` is the user-facing manual (install, configure, verify, troubleshoot); this file is for agents working on the code.
 
@@ -73,17 +73,16 @@ There is no linter and no formatter; match the surrounding code (2-space indent,
 ## Pinned versions
 
 - Node >= 24.11 (`engines` in `package.json`); 24.22.1 is installed.
-- `@paperclipai/plugin-sdk` 2026.1023.0. The host now runs 2026.1029.0-nightly.1, and the routes and response fields this plugin reads were rechecked there on 2026-10-30. Do not upgrade the SDK as a side effect of other work.
-- Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0. The fields the plugin reads are unchanged in 2026.1029.0-nightly.1, which only adds a `github` provider and an optional `environmentId`.
+- `@paperclipai/plugin-sdk` 2026.1023.0. The host now runs 2026.1106.0. The routes and response fields this plugin reads were last rechecked on 2026.1029.0-nightly.1, on 2026-10-30, not yet on 2026.1106.0. Do not upgrade the SDK as a side effect of other work.
+- Paperclip API shapes this plugin reads are copied into `src/usage/types.ts` from `@paperclipai/shared` 2026.1023.0. The fields the plugin reads were unchanged in 2026.1029.0-nightly.1, which only added a `github` provider and an optional `environmentId`; 2026.1106.0 has not been compared.
 - Claude Code 2.1.318, installed by Homebrew at `/opt/homebrew/bin/claude` (it moves on `brew upgrade`). The check's flags were checked against its `--help` on 2026-11-04. Do not use `--bare`: it never reads OAuth tokens, only `ANTHROPIC_API_KEY`.
 
 ## Branches and delivery
 
 - GitHub remote `origin`: `drukoz/Paperclip-Throughput-Panel-Plugin` (private), default branch `main`. Never push to `main` and never force-push; changes reach `main` only through a pull request the user merges.
-- Since 2026-11-12 `feature/ruk-19-throughput-panel` is pushed to `origin`, and pull request #1 proposes it into `main`. After a merge into it, push it (`git push origin feature/ruk-19-throughput-panel`) so the pull request stays current.
+- Pull request #1 merged `feature/ruk-19-throughput-panel` into `main` on 2026-11-12. From RUK-1950 on, each parent task's branch is cut from `origin/main` and gets its own pull request into `main`, which the user reviews and merges.
 - The live plugin is built from `feature/ruk-19-throughput-panel`, which is checked out in the `_default` checkout.
-- Each parent task gets its own branch from it, for example `feature/ruk-249-claude-plan-usage`. Each subtask works in its own git worktree under `/Volumes/Storage/paperclip/worktrees/paperclip-throughput-panel/`, on a branch named `<feature-branch>-RUK-<n>`. Commit on the worktree's current branch; never switch or create branches.
-- On Paperclip 2026.1029.0-nightly.1 a new worktree for this repository comes up as an empty folder, so subtasks reuse the six worktrees `feature/ruk-249-claude-plan-usage-RUK-250` to `-RUK-255`. Their branch names carry old task names; each spec's Setup fast-forwards the branch to the feature branch first, and every merge commit names its task: `Merge <branch> (RUK-n)`.
+- Each parent task gets its own branch, for example `feature/ruk-1950-plan-reset-time`. Each subtask works in its own git worktree, on a branch named `<feature-branch>-RUK-<n>`. Since the project workspace became the GitHub repository (2026-11-14), Paperclip clones it as `Paperclip-Throughput-Panel-Plugin` next to `_default` and puts each subtask's worktree under that clone's `.paperclip/worktrees/` (git-ignored). Commit on the worktree's current branch; never switch or create branches.
 - Delivered on 2026-11-04: `feature/ruk-518-usage-probe` (RUK-518, which carried RUK-249's rework `feature/ruk-249-usage-from-runs`). Later RUK-518 work branches from `feature/ruk-19-throughput-panel`.
 - At delivery the CTO merges the feature branch into `feature/ruk-19-throughput-panel` in `_default` and runs `npm run build` there. The user then reloads the Paperclip page, and, when the worker changed, disables and re-enables the plugin once.
 
