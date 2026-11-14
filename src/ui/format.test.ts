@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatAge, formatCount, formatPct, formatRate, formatResetIn, formatSource, isWindowRestarted, meterDetails, usageColor } from "./format.ts";
+import { formatAge, formatCount, formatPct, formatRate, formatResetAt, formatResetIn, formatSource, isWindowRestarted, meterDetails, nextResetAt, resetDetails, usageColor } from "./format.ts";
 
 test("formatRate rounds below 1000 to an integer", () => {
   assert.equal(formatRate(0), "0");
@@ -151,6 +151,53 @@ test("usageColor thresholds are green below 75, amber to 90, red at 90", () => {
     assert.equal(
       meterDetails("Weekly", { usedPercent: 41, resetsAt: null }, NOW),
       "Weekly: 41% used, reset time not reported",
+    );
+  });
+}
+
+// Block scope so NOW here is the Resets-row clock, not the module-level one.
+{
+  const NOW = Date.parse("2026-11-04T14:00:00.000Z");
+
+  test("formatResetAt renders weekday, day, month and 24-hour time in the zone", () => {
+    assert.equal(formatResetAt("2026-11-05T16:00:00.000Z", "UTC"), "Thu 5 Nov 16:00");
+    assert.equal(formatResetAt("2026-11-05T16:00:00.000Z", "America/Mexico_City"), "Thu 5 Nov 10:00");
+    assert.equal(formatResetAt("2026-11-05T16:00:00.000Z", "Asia/Kolkata"), "Thu 5 Nov 21:30");
+    assert.equal(formatResetAt("2026-11-15T00:05:00.000Z", "UTC"), "Sun 15 Nov 00:05");
+    assert.equal(formatResetAt("2026-11-15T23:59:00.000Z", "UTC"), "Sun 15 Nov 23:59");
+  });
+
+  test("formatResetAt renders the dash for null and unparseable input", () => {
+    assert.equal(formatResetAt(null, "UTC"), "—");
+    assert.equal(formatResetAt("garbage", "UTC"), "—");
+  });
+
+  test("nextResetAt takes the weekly reset, falling back to the Fable one", () => {
+    const weekly = { usedPercent: 40, resetsAt: "2026-11-05T16:00:00.000Z" };
+    assert.equal(nextResetAt({ session: null, weekly, fable: null }, NOW), "2026-11-05T16:00:00.000Z");
+    const fable = { usedPercent: 10, resetsAt: "2026-11-06T16:00:00.000Z" };
+    assert.equal(nextResetAt({ session: null, weekly: null, fable }, NOW), "2026-11-06T16:00:00.000Z");
+  });
+
+  test("nextResetAt is null for a past, unparseable or missing reset time", () => {
+    const past = { usedPercent: 40, resetsAt: "2026-11-04T13:00:00.000Z" };
+    assert.equal(nextResetAt({ session: null, weekly: past, fable: null }, NOW), null);
+    const unknown = { usedPercent: 40, resetsAt: null };
+    assert.equal(nextResetAt({ session: null, weekly: unknown, fable: null }, NOW), null);
+    const garbage = { usedPercent: 40, resetsAt: "garbage" };
+    assert.equal(nextResetAt({ session: null, weekly: garbage, fable: null }, NOW), null);
+  });
+
+  test("nextResetAt never falls back to the session window", () => {
+    const session = { usedPercent: 5, resetsAt: "2026-11-05T16:00:00.000Z" };
+    assert.equal(nextResetAt({ session, weekly: null, fable: null }, NOW), null);
+  });
+
+  test("resetDetails sentences the reset time for the Resets row", () => {
+    assert.equal(resetDetails(null, NOW), "Weekly limit: next reset time not known yet");
+    assert.equal(
+      resetDetails("2026-11-05T16:00:00.000Z", NOW, "UTC"),
+      "Weekly limit resets in 1d 2h, on Thu 5 Nov 16:00",
     );
   });
 }
