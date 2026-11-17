@@ -264,12 +264,76 @@ function llamaCppSample(series: PromSeries[], at: number): MetricsSample {
 }
 
 /**
+ * Assemble the single Splash 1.7.0 sample from its Prometheus `GET /metrics` scrape. Splash
+ * puts no labels on the metrics we read, so every name is summed over all series. Mapping:
+ * `generationTokens` `splash_decode_output_tokens_total`; `promptTokens`
+ * `splash_prefill_input_tokens_total`; the prefix-cache pair from
+ * `splash_cache_reused_tokens_total` (queries are reused + prefilled); spec decoding from
+ * `splash_accepted_draft_tokens_total` / `splash_drafted_tokens_total`; running is
+ * `splash_scheduler_prefilling` + `splash_scheduler_decoding`; waiting is
+ * `splash_frontend_waiting` + `splash_scheduler_queued` + `splash_scheduler_waiting_resources`;
+ * `kvCacheUsage` is `splash_kv_pages_active` / `splash_kv_pages_allocated` (max of each), null
+ * when either is absent or allocated is not positive; TTFT from the
+ * `splash_http_ttft_seconds` histogram's `_sum` and `_count`.
+ *
+ * `promptTokens` counts only the tokens Splash actually prefilled: reused-cache tokens are not
+ * in it, they are the prefix-cache hit rate, exactly as Gufo's llama.cpp counters are read.
+ * `decodeTokens` and `decodeSeconds` stay 0 because Splash has no decode-time counter, so
+ * per-request tok/s reads null (the panel shows an em-dash) for the M5U.
+ */
+function splashSample(series: PromSeries[], at: number): MetricsSample {
+  const sum = (name: string): number =>
+    series
+      .filter((s) => s.name === name && Number.isFinite(s.value))
+      .reduce((total, s) => total + s.value, 0);
+
+  const maxOrNull = (name: string): number | null => {
+    const values = series
+      .filter((s) => s.name === name && Number.isFinite(s.value))
+      .map((s) => s.value);
+    return values.length > 0 ? Math.max(...values) : null;
+  };
+
+  const promptTokens = sum("splash_prefill_input_tokens_total");
+  const hasReusedMetric = series.some((s) => s.name === "splash_cache_reused_tokens_total");
+  const prefixCacheHits = hasReusedMetric ? sum("splash_cache_reused_tokens_total") : 0;
+
+  const pagesActive = maxOrNull("splash_kv_pages_active");
+  const pagesAllocated = maxOrNull("splash_kv_pages_allocated");
+  const kvCacheUsage =
+    pagesActive !== null && pagesAllocated !== null && pagesAllocated > 0
+      ? pagesActive / pagesAllocated
+      : null;
+
+  return {
+    at,
+    generationTokens: sum("splash_decode_output_tokens_total"),
+    promptTokens,
+    prefixCacheHits,
+    prefixCacheQueries: hasReusedMetric ? prefixCacheHits + promptTokens : 0,
+    specAcceptedTokens: sum("splash_accepted_draft_tokens_total"),
+    specDraftTokens: sum("splash_drafted_tokens_total"),
+    numRequestsRunning: sum("splash_scheduler_prefilling") + sum("splash_scheduler_decoding"),
+    numRequestsWaiting:
+      sum("splash_frontend_waiting") +
+      sum("splash_scheduler_queued") +
+      sum("splash_scheduler_waiting_resources"),
+    kvCacheUsage,
+    decodeTokens: 0,
+    decodeSeconds: 0,
+    firstTokenSeconds: sum("splash_http_ttft_seconds_sum"),
+    firstTokenCount: sum("splash_http_ttft_seconds_count"),
+  };
+}
+
+/**
  * Every model in one scrape. vLLM: one entry per distinct `model_name` label that has a
  * finite `vllm:generation_tokens_total`, sorted by name (series without the label form one
  * entry with modelName null, sorted first); `modelName` keeps only that model. llama.cpp:
  * one entry with modelName null; `modelName` is ignored (its metrics carry no labels).
- * Null when the scrape has neither `vllm:generation_tokens_total` nor
- * `llamacpp:tokens_predicted_total`.
+ * Splash: one entry with modelName null; `modelName` is ignored (its `splash_*` metrics carry
+ * no labels). Null when the scrape has none of `vllm:generation_tokens_total`,
+ * `llamacpp:tokens_predicted_total` or `splash_decode_output_tokens_total`.
  */
 export function selectSamples(
   series: PromSeries[],
@@ -309,6 +373,13 @@ export function selectSamples(
     return {
       kind: ServerKind.LlamaCpp,
       models: [{ modelName: null, sample: llamaCppSample(series, options.at) }],
+    };
+  }
+
+  if (series.some((s) => s.name === "splash_decode_output_tokens_total")) {
+    return {
+      kind: ServerKind.Splash,
+      models: [{ modelName: null, sample: splashSample(series, options.at) }],
     };
   }
 
