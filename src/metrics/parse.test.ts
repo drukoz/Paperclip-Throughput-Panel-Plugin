@@ -301,3 +301,70 @@ test("selectSamples is null for unrelated metrics", () => {
   const series = parsePrometheusText("process_cpu_seconds_total 1.5");
   assert.equal(selectSamples(series, { at: 0 }), null);
 });
+
+const SPLASH_FIXTURE = readFileSync(
+  new URL("./fixtures/splash-metrics.txt", import.meta.url),
+  "utf8",
+);
+
+test("selectSamples reads the Splash fixture", () => {
+  const series = parsePrometheusText(SPLASH_FIXTURE);
+  const result = selectSamples(series, { at: 1000 });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.Splash);
+  assert.equal(result?.models.length, 1);
+  assert.equal(result?.models[0]?.modelName, null);
+  assert.deepEqual(result?.models[0]?.sample, {
+    at: 1000,
+    generationTokens: 59810,
+    promptTokens: 377705,
+    prefixCacheHits: 2699424,
+    prefixCacheQueries: 3077129,
+    specAcceptedTokens: 45600,
+    specDraftTokens: 105356,
+    numRequestsRunning: 1,
+    numRequestsWaiting: 0,
+    kvCacheUsage: 0.126953125,
+    decodeTokens: 0,
+    decodeSeconds: 0,
+    firstTokenSeconds: 113.47806229325943,
+    firstTokenCount: 59,
+  });
+});
+
+test("Splash ignores modelName", () => {
+  const series = parsePrometheusText(SPLASH_FIXTURE);
+  const result = selectSamples(series, { at: 1000, modelName: "other" });
+  assert.notEqual(result, null);
+  assert.equal(result?.kind, ServerKind.Splash);
+  assert.equal(result?.models.length, 1);
+  assert.equal(result?.models[0]?.modelName, null);
+});
+
+test("Splash running and waiting add up their stages", () => {
+  const series = parsePrometheusText(
+    [
+      "splash_decode_output_tokens_total 1",
+      "splash_scheduler_prefilling 2",
+      "splash_scheduler_decoding 3",
+      "splash_frontend_waiting 4",
+      "splash_scheduler_queued 5",
+      "splash_scheduler_waiting_resources 6",
+    ].join("\n"),
+  );
+  const sample = selectSamples(series, { at: 0 })?.models[0]?.sample;
+  assert.equal(sample?.numRequestsRunning, 5);
+  assert.equal(sample?.numRequestsWaiting, 15);
+});
+
+test("Splash without KV or cache metrics", () => {
+  const bare = parsePrometheusText("splash_decode_output_tokens_total 10\n");
+  const sample = selectSamples(bare, { at: 0 })?.models[0]?.sample;
+  assert.equal(sample?.kvCacheUsage, null);
+  assert.equal(sample?.prefixCacheHits, 0);
+  assert.equal(sample?.prefixCacheQueries, 0);
+  const zeroAllocated = parsePrometheusText(
+    "splash_decode_output_tokens_total 10\nsplash_kv_pages_active 5\nsplash_kv_pages_allocated 0\n",
+  );
+  assert.equal(selectSamples(zeroAllocated, { at: 0 })?.models[0]?.sample.kvCacheUsage, null);
+});

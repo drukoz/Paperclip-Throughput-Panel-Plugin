@@ -37,8 +37,8 @@ function normalizeToken(value: unknown): unknown {
 /** Server 2's default endpoint: the A9 Mega through the launchd forwarder `com.drukoz.llm-forward-a9`. */
 const A9_METRICS_URL = "http://127.0.0.1:18082/metrics";
 
-/** Server 3's default endpoint: the M5U's oMLX activity route, through the launchd forwarder `com.drukoz.llm-forward-m5u`. */
-const M5U_ACTIVITY_URL = "http://127.0.0.1:18083/admin/api/activity";
+/** Server 3's default endpoint: the M5U's Splash `/metrics`, through the launchd forwarder `com.drukoz.llm-forward-m5u` (RUK-2789; oMLX's `/admin/api/activity` until the M5U moved to Splash). */
+const M5U_METRICS_URL = "http://127.0.0.1:18083/metrics";
 
 /** The enabled servers in slot order, from the config table in the contract. */
 export function resolveServers(
@@ -71,7 +71,7 @@ export function resolveServers(
   }
 
   const raw3 = cfg.server3MetricsUrl;
-  const url3 = typeof raw3 === "string" ? raw3.trim() : M5U_ACTIVITY_URL;
+  const url3 = typeof raw3 === "string" ? raw3.trim() : M5U_METRICS_URL;
   if (url3 !== "") {
     servers.push({
       slot: 3,
@@ -111,7 +111,7 @@ export interface ServerPoller {
   dispose(): void;
 }
 
-/** Scrape interval for llama.cpp's `/v1/models` model name, in ms. */
+/** Scrape interval for the `/v1/models` model name of label-less servers (llama.cpp, Splash), in ms. */
 const NAME_FETCH_INTERVAL_MS = 60_000;
 
 /** Create a poller for one server setting, with all outside world injected through `deps`. */
@@ -122,7 +122,7 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
   let started = false;
   let kind: ServerKind = ServerKind.Unknown;
   let lastSampleAt: number | null = null;
-  let llamaName: string | null = null;
+  let servedName: string | null = null;
   let lastNameFetchAt: number | null = null;
   let disposed = false;
 
@@ -165,7 +165,7 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
       }
       if (disposed) return;
       if (selected === null) {
-        lastError = `no vLLM, llama.cpp or oMLX metrics at ${setting.metricsUrl}`;
+        lastError = `no vLLM, llama.cpp, Splash or oMLX metrics at ${setting.metricsUrl}`;
         return;
       }
       kind = selected.kind;
@@ -186,7 +186,10 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
       lastError = null;
       lastSampleAt = at;
 
-      if (kind === ServerKind.LlamaCpp && (lastNameFetchAt === null || at - lastNameFetchAt >= NAME_FETCH_INTERVAL_MS)) {
+      if (
+        (kind === ServerKind.LlamaCpp || kind === ServerKind.Splash) &&
+        (lastNameFetchAt === null || at - lastNameFetchAt >= NAME_FETCH_INTERVAL_MS)
+      ) {
         lastNameFetchAt = at;
         try {
           const nameUrl = new URL("/v1/models", setting.metricsUrl).toString();
@@ -196,7 +199,7 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
             const data = typeof body === "object" && body !== null ? (body as { data?: unknown }).data : undefined;
             const first = Array.isArray(data) && data.length > 0 ? data[0] : undefined;
             const id = typeof first === "object" && first !== null ? (first as { id?: unknown }).id : undefined;
-            if (!disposed && typeof id === "string" && id !== "") llamaName = id;
+            if (!disposed && typeof id === "string" && id !== "") servedName = id;
           }
         } catch {
           /* the name is optional */
@@ -222,7 +225,8 @@ export function createServerPoller(setting: ServerSetting, deps: ServerPollerDep
           window,
           lastError,
           started,
-          modelName: key === "" ? (kind === ServerKind.LlamaCpp ? llamaName : null) : key,
+          modelName:
+            key === "" ? (kind === ServerKind.LlamaCpp || kind === ServerKind.Splash) ? servedName : null : key,
         }),
       );
     return {

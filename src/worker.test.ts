@@ -251,7 +251,7 @@ test("the default config polls hpcserver, the A9 and the M5U", async () => {
       () =>
         calls.some((c) => c.url === "http://127.0.0.1:18081/metrics") &&
         calls.some((c) => c.url === "http://127.0.0.1:18082/metrics") &&
-        calls.some((c) => c.url === "http://127.0.0.1:18083/admin/api/activity"),
+        calls.some((c) => c.url === "http://127.0.0.1:18083/metrics"),
       2000,
     );
     const snap = (await snapshot()) as ServersSnapshot;
