@@ -73,14 +73,14 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "string",
         title: "Server 3: metrics URL",
         description:
-          "The M5U (oMLX on a Mac Studio): its /admin/api/activity route. Save it empty to hide this server.",
-        default: "http://127.0.0.1:18083/admin/api/activity",
+          "The M5U (Splash on a Mac Studio): its Prometheus /metrics route. Save it empty to hide this server.",
+        default: "http://127.0.0.1:18083/metrics",
       },
       server3Token: {
         format: "secret-ref",
         title: "Server 3: token",
         description:
-          "The M5U's oMLX main API key: pick the Paperclip secret that the M5U AI connection uses, or press + to store it. A sub-key answers 401 on the activity route.",
+          "The M5U's Splash API key: pick the Paperclip secret that the M5U AI connection uses, or press + to store it. Without it Splash answers 401.",
       },
       pollIntervalMs: {
         type: "number",

@@ -72,6 +72,10 @@ function llamaScrape(at: number): SelectedSamples {
   return { kind: ServerKind.LlamaCpp, models: [{ modelName: null, sample: sample(at) }] };
 }
 
+function splashScrape(at: number): SelectedSamples {
+  return { kind: ServerKind.Splash, models: [{ modelName: null, sample: sample(at) }] };
+}
+
 const slot1: ServerSetting = {
   slot: 1,
   label: "hpcserver",
@@ -92,6 +96,14 @@ const m5u: ServerSetting = {
   slot: 3,
   label: "M5U",
   metricsUrl: "http://127.0.0.1:18083/admin/api/activity",
+  token: "k",
+  modelName: null,
+};
+
+const splash: ServerSetting = {
+  slot: 3,
+  label: "M5U",
+  metricsUrl: "http://127.0.0.1:18083/metrics",
   token: "k",
   modelName: null,
 };
@@ -133,7 +145,7 @@ test("resolveServers with no config gives hpcserver, the A9 and the M5U", () => 
     [
       "http://127.0.0.1:18081/metrics",
       "http://127.0.0.1:18082/metrics",
-      "http://127.0.0.1:18083/admin/api/activity",
+      "http://127.0.0.1:18083/metrics",
     ],
   );
   // No server has a built-in key: every token comes from the settings (RUK-2003).
@@ -265,7 +277,7 @@ test("a select miss is unreachable with the URL in the error", async () => {
   await poller.poll();
   const snap = poller.snapshot();
   assert.equal(snap.status, ServerStatus.Unreachable);
-  assert.equal(snap.error, "no vLLM, llama.cpp or oMLX metrics at http://127.0.0.1:18081/metrics");
+  assert.equal(snap.error, "no vLLM, llama.cpp, Splash or oMLX metrics at http://127.0.0.1:18081/metrics");
 });
 
 test("an oMLX activity body is read with /api/status", async () => {
@@ -383,6 +395,30 @@ test("a /v1/models failure leaves the name null", async () => {
   const poller = createServerPoller(slot2, fakes.deps);
   await poller.poll();
   assert.equal(poller.snapshot().models[0]?.modelName, null);
+});
+
+test("Splash takes its model name from /v1/models with the same key", async () => {
+  const names = new Response(JSON.stringify({ data: [{ id: "local/swift15-q6_k" }] }), { status: 200 });
+  const fakes = makeFakes([ok(), names], [splashScrape(1_000)]);
+  const poller = createServerPoller(splash, fakes.deps);
+  await poller.poll();
+  assert.equal(fakes.calls.length, 2);
+  assert.equal(fakes.calls[0]?.url, "http://127.0.0.1:18083/metrics");
+  assert.equal(fakes.calls[1]?.url, "http://127.0.0.1:18083/v1/models");
+  assert.deepEqual(fakes.calls[0]?.headers, { Authorization: "Bearer k" });
+  assert.deepEqual(fakes.calls[1]?.headers, { Authorization: "Bearer k" });
+  const snap = poller.snapshot();
+  assert.equal(snap.kind, ServerKind.Splash);
+  assert.equal(snap.models[0]?.modelName, "local/swift15-q6_k");
+  assert.equal(snap.status, ServerStatus.Ok);
+});
+
+test("a Splash /v1/models failure leaves the name null", async () => {
+  const fakes = makeFakes([ok(), new Response("", { status: 404 })], [splashScrape(1_000)]);
+  const poller = createServerPoller(splash, fakes.deps);
+  await poller.poll();
+  assert.equal(poller.snapshot().models[0]?.modelName, null);
+  assert.equal(poller.snapshot().status, ServerStatus.Ok);
 });
 
 test("dispose stops an in-flight poll from writing", async () => {
