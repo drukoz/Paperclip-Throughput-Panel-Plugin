@@ -2,21 +2,21 @@
 
 ## What it is
 
-A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM, llama.cpp or **oMLX** — as a small floating panel in the Paperclip UI. The third is the M5U: a Mac on the LAN running oMLX 0.7.4.dev1 ([github.com/jundot/omlx](https://github.com/jundot/omlx)), serving `swift15-oq8e`, which this Mac reaches at `http://127.0.0.1:18083` through the launchd forwarder `com.drukoz.llm-forward-m5u` (to port 8081 on the M5U). A worker on the Paperclip host reads Prometheus metrics from vLLM and llama.cpp, and oMLX's JSON activity and status routes, and tells the formats apart by their metric names (`vllm:…` / `llamacpp:…`) or by an oMLX activity body; the panel's kind label for that server reads `oMLX`. The plugin id is `rukoz.throughput-panel`.
+A Paperclip plugin that shows a live tokens/sec readout for every model on each of up to three local model servers — each running vLLM, llama.cpp or **Splash** — as a small floating panel in the Paperclip UI. The third is the M5U: a Mac Studio on the LAN that runs Splash 1.7.0 since 17 November 2026, serving Swift-1.5 Q6_K with a DFlash2 draft model, which this Mac reaches at `http://127.0.0.1:18083` through the launchd forwarder `com.drukoz.llm-forward-m5u` (to port 8081 on the M5U). A worker on the Paperclip host reads each server's Prometheus `/metrics` and tells the formats apart by their metric names (`vllm:…` / `llamacpp:…` / `splash_…`); the panel's kind label for the M5U reads `Splash`. The plugin id is `rukoz.throughput-panel`.
 
-oMLX has no Prometheus `/metrics` endpoint — it answers 404 — so the worker reads two JSON routes instead: `GET /admin/api/activity`, the live rows of every request being prefilled or generated, per loaded model, and `GET /api/status`, the session totals of prompt, completion and cached tokens. oMLX adds a request's tokens to those totals only when the request finishes, so the worker computes live tok/s from the activity rows (each request's growing `generated_tokens`) and uses the totals for the tokens a request produced after the last poll, and for the cache hit rate.
+Splash's metrics carry no per-model labels, so the M5U section has one model block, named from Splash's `GET /v1/models`. Splash wants its API key on every route except `/health`. Until 17 November 2026 the M5U ran **oMLX**, which has no `/metrics`; the worker still reads oMLX's JSON routes (`GET /admin/api/activity` and `GET /api/status`) when server 3 is pointed at an oMLX activity URL, but nothing runs oMLX now.
 
 The panel has one section per configured server, headed by the server's label, and inside it one block per model the server reports. The collapsed pill shows the total generation tok/s summed across every server.
 
 Each model block shows:
 
 - Generation and prompt tok/s, with an average over a selectable window (1m / 5m / 15m) that counts only the time the server was producing tokens
-- Per-request tok/s — the speed a single agent sees while decoding (decode tokens divided by decode time)
-- Time to first token (TTFT), the mean over requests in the window (vLLM only)
+- Per-request tok/s — the speed a single agent sees while decoding (decode tokens divided by decode time; not Splash, which reports no decode time)
+- Time to first token (TTFT), the mean over requests in the window (vLLM and Splash)
 - Requests running and waiting
-- KV cache usage (vLLM, and llama.cpp servers that report it, such as the A9's Gufo; not oMLX)
-- Prefix-cache hit rate (vLLM, llama.cpp servers that report it, such as the A9's Gufo, and oMLX)
-- MTP / draft (speculative decoding) acceptance rate (not oMLX)
+- KV cache usage (vLLM, Splash, and llama.cpp servers that report it, such as the A9's Gufo)
+- Prefix-cache hit rate (vLLM, Splash, and llama.cpp servers that report it, such as the A9's Gufo)
+- MTP / draft (speculative decoding) acceptance rate (for Splash: its DFlash2 draft model)
 - A generation tok/s sparkline covering the selected window
 - The selected window, remembered across reloads in `localStorage`
 - An explicit unreachable state, per server, when that server's endpoint cannot be reached
@@ -103,8 +103,8 @@ Configuration is company-scoped. There are two ways to set it:
 | `server2MetricsUrl` | string | `http://127.0.0.1:18082/metrics` | Server 2's Prometheus `/metrics` endpoint — the A9 Mega (Strix Halo). Save it empty to hide this server. |
 | `server2Token` | secret | *(none)* | Server 2's bearer token. The A9 Mega needs one: its read-only metrics key, stored as a Paperclip secret. |
 | `server3Label` | string | `M5U` | Server 3's label, shown in the panel. |
-| `server3MetricsUrl` | string | `http://127.0.0.1:18083/admin/api/activity` | The M5U's oMLX activity route; save it empty to hide this server. |
-| `server3Token` | secret | *(none)* | oMLX's main API key; no built-in key. |
+| `server3MetricsUrl` | string | `http://127.0.0.1:18083/metrics` | The M5U's Splash `/metrics` route; save it empty to hide this server. |
+| `server3Token` | secret | *(none)* | Splash's API key; no built-in key. |
 | `pollIntervalMs` | number | `5000` | Poll interval in milliseconds; minimum 1000, clamped to 60000. |
 | `claudeAccount1Label` … `claudeAccount3Label` | string | *(none)* | Shown in the panel as "Claude · <label>"; blank means "Account <n>". |
 | `claudeAccount1Token` … `claudeAccount3Token` | secret | *(none)* | A Claude Code token for that account, from `claude setup-token`, stored as a Paperclip secret. A slot without a token is ignored. A raw value pasted instead stays in these settings as plain text. |
@@ -129,7 +129,7 @@ The secret reference is the recommended form. The plugin resolves it at call tim
 
 Each server has its own token field — `authToken` for server 1, `server2Token` for server 2, `server3Token` for server 3 — and each is a secret field, so the settings page shows a secret picker for it. The A9 Mega needs **Server 2: token**: pick the Paperclip secret that holds the A9's read-only metrics key, or press **+** to store it as a new secret. With the field empty, the A9's section shows `HTTP 401`.
 
-The M5U needs **Server 3: token**, and it must be oMLX's **main** API key. oMLX's activity route is an admin route, so the main key is required there and a sub-key is answered `401`; `/api/status` accepts any key. Pick the Paperclip secret the M5U AI connection uses, if that secret holds oMLX's main key, or press **+** to store the main key as a new secret. The main key also allows inference and every oMLX admin action — unloading models, restarting the server, changing settings — so the plugin limits it narrowly: it sends it only with `GET` to the two oMLX routes on that server, the configured `server3MetricsUrl` and the same server's `/api/status`, and never logs, stores or shows it.
+The M5U needs **Server 3: token**: Splash's API key. Splash answers `401` on every route except `/health` without it. Pick the Paperclip secret the M5U AI connection uses, or press **+** to store the key as a new secret. The key also allows inference, so the plugin limits it narrowly: it sends it only with `GET`, to the configured `server3MetricsUrl` and the same server's `/v1/models` (for the model name, at most once a minute), and never logs, stores or shows it. If you point server 3 back at an oMLX activity URL, the key must be oMLX's **main** API key (a sub-key gets `401` there), and the plugin also reads that server's `/api/status`.
 
 ### Claude accounts
 
@@ -171,7 +171,7 @@ For an installed plugin, **operator config is the only supported way** to set `m
 
 ## Verify
 
-Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics`, `18082/metrics` and `18083` checks in step 4 do not. The A9 (`18082`) check needs the A9 Mega's key in your own shell, not a board credential; the M5U (`18083`) checks need oMLX's main key the same way, and its `/health` needs no key at all.
+Run these on the Paperclip host. The two `/api/plugins` routes below need a **board instance-admin credential** (`<BOARD_API_KEY>`); the direct `18081/metrics`, `18082/metrics` and `18083` checks in step 4 do not. The A9 (`18082`) check needs the A9 Mega's key in your own shell, not a board credential; the M5U (`18083`) checks need Splash's key the same way, and its `/health` needs no key at all.
 
 1. The plugin is installed and enabled:
 
@@ -204,16 +204,16 @@ Run these on the Paperclip host. The two `/api/plugins` routes below need a **bo
    curl -s -H "Authorization: Bearer $A9_KEY" http://127.0.0.1:18082/metrics | grep -E '^(vllm|llamacpp):' | head
    ```
 
-   The M5U (oMLX; `/health` needs no key, the two JSON routes need oMLX's main key). Type the key into your own shell's `M5U_KEY` variable — never paste it as plain text into a chat, a file, or anywhere it is logged (in the plugin settings it goes in only through the secret picker of **Server 3: token**):
+   The M5U (Splash; `/health` needs no key, `/metrics` and `/v1/models` need Splash's API key). Type the key into your own shell's `M5U_KEY` variable — never paste it as plain text into a chat, a file, or anywhere it is logged (in the plugin settings it goes in only through the secret picker of **Server 3: token**):
 
    ```bash
    curl -s http://127.0.0.1:18083/health
-   read -rs M5U_KEY   # type oMLX's main key, press Enter; it stays in your shell only
-   curl -s -H "Authorization: Bearer $M5U_KEY" http://127.0.0.1:18083/admin/api/activity | head -c 600; echo
-   curl -s -H "Authorization: Bearer $M5U_KEY" http://127.0.0.1:18083/api/status | head -c 600; echo
+   read -rs M5U_KEY   # type Splash's API key, press Enter; it stays in your shell only
+   curl -s -H "Authorization: Bearer $M5U_KEY" http://127.0.0.1:18083/metrics | grep -E '^splash_(decode_output_tokens_total|scheduler_decoding|kv_pages_active) '
+   curl -s -H "Authorization: Bearer $M5U_KEY" http://127.0.0.1:18083/v1/models; echo
    ```
 
-   Expected: `/health` answers `{"status":"healthy","default_model":"swift15-oq8e",...}`; the activity route answers JSON starting `{"active_models":{"models":[{"id":"swift15-oq8e",...`; `/api/status` answers JSON with `"total_completion_tokens"`.
+   Expected: `/health` answers `{"status":"ok"}`; `/metrics` prints the three `splash_…` lines with numbers; `/v1/models` answers JSON with `"owned_by":"splash"`.
 
    If these return lines, the endpoint is up and the panel should follow within a few seconds.
 
@@ -238,8 +238,9 @@ paperclipai connect --persona board
 ```
 
 - **A server's section shows "Model server unreachable".** That server's scrape failed. Check its endpoint directly (server 1: `curl -s http://127.0.0.1:18081/metrics`; the A9 Mega: the `18082/metrics` check in [Verify](#verify); the M5U: `curl -s http://127.0.0.1:18083/health`), its configured URL (`metricsUrl`, `server2MetricsUrl`, `server3MetricsUrl`), and its token. See the status-code notes below.
-- **A server's section shows `HTTP 401`.** That server's bearer token is missing or wrong. Set the server's token field (`authToken`, `server2Token`, or `server3Token`) in the plugin settings; the A9 Mega needs `server2Token` on every request. The M5U says `HTTP 401 Unauthorized — set this server's token in the plugin settings` when **Server 3: token** is empty: set it. It says `HTTP 401 Unauthorized — oMLX's activity route needs the server's main API key; a sub-key reaches only /api/status` when a sub-key or a wrong key is set: replace it with oMLX's main API key. If the token is set and the M5U still says 401 right after a plugin restart, opening the panel page once reloads the settings within a minute, and saving the plugin settings unchanged also does.
-- **The M5U block shows tok/s but no cache hit rate.** Its `/api/status` call failed: the live tok/s comes from the activity route and keeps working, so only the cache hit rate reads empty. Run the `/api/status` check in [Verify](#verify), and check **Server 3: token** — any key reaches that route.
+- **A server's section shows `HTTP 401`.** That server's bearer token is missing or wrong. Set the server's token field (`authToken`, `server2Token`, or `server3Token`) in the plugin settings; the A9 Mega needs `server2Token` on every request. The M5U says `HTTP 401 Unauthorized — set this server's token in the plugin settings` when **Server 3: token** is empty: set it to Splash's API key. A plain `HTTP 401 Unauthorized` with the token set means Splash refused that key: pick the secret that holds the key the M5U's Splash runs with. (Only when server 3 points at a legacy oMLX activity URL does it say `… oMLX's activity route needs the server's main API key; a sub-key reaches only /api/status`.) If the token is set and the M5U still says 401 right after a plugin restart, opening the panel page once reloads the settings within a minute, and saving the plugin settings unchanged also does.
+- **The M5U section shows `HTTP 404 Not Found`.** Server 3's URL points at a route Splash does not serve, such as oMLX's old `/admin/api/activity`. Save **Server 3: metrics URL** as `http://127.0.0.1:18083/metrics`, or clear it so the default applies.
+- **The M5U block shows `—` for per-request tok/s.** Expected: Splash reports no decode-time counter, so the per-request speed cannot be worked out. The generation tok/s and its window average are the M5U's throughput.
 - **A llama.cpp server answers `HTTP 404` or `HTTP 501`.** `llama-server` publishes `/metrics` only when it was started with `--metrics`; without that flag the path does not exist. A 404 can also mean the Caddy in front of the server does not forward `/metrics`. Start llama.cpp with `--metrics`, and check the Caddy route.
 - **A llama.cpp server answers `HTTP 400 "model name is missing"`.** The server runs in llama.cpp router mode (several models behind one endpoint), which is not supported yet.
 - **Panel shows "Model server unreachable" with an error mentioning "private/reserved ranges".** The worker is routing through the host's guarded HTTP client instead of scraping directly; that is the bug fixed in RUK-52, so make sure the installed build includes it.
@@ -300,7 +301,7 @@ src/
 
 - The panel sits in the bottom-right corner, where Paperclip's overlay container puts it; it is not draggable or resizable. On a phone it stays a 232 px corner card rather than going full width.
 - The prefix-cache hit rate and MTP acceptance rate are cumulative since the model server started; the average-window selector does not affect them.
-- oMLX (the M5U) publishes no TTFT, KV cache or MTP numbers, so those read `—` in its blocks, and its prefix-cache hit rate is server-wide — `total_cached_tokens / total_prompt_tokens` — not per model.
+- Splash (the M5U) publishes no decode-time counter, so per-request tok/s reads `—` in its block. Its prompt tok/s counts only tokens it actually prefilled; tokens reused from its prompt cache count toward the prefix-cache hit rate instead. A legacy oMLX server publishes no TTFT, KV cache or MTP numbers, and its prefix-cache hit rate is server-wide.
 - A counter reset (a model server restart) clears the sample window, so rates read `—` for one poll afterwards until two fresh samples accumulate.
 - The windowed average skips intervals with no tokens, so it is an average of active throughput, not of wall-clock time; a window in which nothing ran at all reads `0`. The instantaneous readout and the sparkline are not filtered this way.
 - Claude plan usage is shown only in the expanded card, not in the collapsed pill.

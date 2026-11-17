@@ -5,7 +5,7 @@ export const ServerStatus = { Starting: 0, Ok: 1, Unreachable: 2 } as const;
 export type ServerStatus = (typeof ServerStatus)[keyof typeof ServerStatus];
 
 /** Which metrics format a server publishes. Numbers are fixed: never renumber or reuse one. */
-export const ServerKind = { Unknown: 0, Vllm: 1, LlamaCpp: 2, Omlx: 3 } as const;
+export const ServerKind = { Unknown: 0, Vllm: 1, LlamaCpp: 2, Omlx: 3, Splash: 4 } as const;
 export type ServerKind = (typeof ServerKind)[keyof typeof ServerKind];
 
 /** One parsed scrape of the vLLM `/metrics` endpoint. */
